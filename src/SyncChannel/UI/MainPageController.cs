@@ -1,61 +1,58 @@
-﻿using MediaBrowser.Controller;
-using MediaBrowser.Model.Logging;
-using MediaBrowser.Model.Plugins;
-using MediaBrowser.Model.Plugins.UI;
-using MediaBrowser.Model.Plugins.UI.Views;
-using SyncChannel.UIBaseClasses;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-
 namespace SyncChannel.UI
 {
-    internal class MainPageController : ControllerBase, IHasTabbedUIPages
+    using System.Threading.Tasks;
+    using SyncChannel.Configuration;
+    using SyncChannel.Services;
+    using SyncChannel.UIBaseClasses;
+    using MediaBrowser.Model.Logging;
+    using MediaBrowser.Model.Plugins;
+    using MediaBrowser.Model.Plugins.UI.Views;
+    using MediaBrowser.Model.Tasks;
+
+    // Unlike ManageComingSoon's MainPageController, this plugin has only one
+    // settings surface (Configuration) — the Rules editor is served as its
+    // own standalone page via IHasWebPages, independent of this controller.
+    // So no tab machinery (IHasTabbedUIPages / TabPageController) is needed
+    // here at all — just a single IsMainConfigPage page.
+    internal class MainPageController : ControllerBase
     {
         private readonly PluginInfo pluginInfo;
-        private readonly IServerApplicationHost applicationHost;
+        private readonly SyncChannelPlugin plugin;
+        private readonly ITaskManager taskManager;
+        private readonly RadarrChannelIdentityReconciler reconciler;
         private readonly ILogger logger;
-
-        private readonly List<IPluginUIPageController> tabPages =
-            new List<IPluginUIPageController>();
-
 
         public MainPageController(
             PluginInfo pluginInfo,
-            IServerApplicationHost applicationHost,
+            SyncChannelPlugin plugin,
+            ITaskManager taskManager,
+            RadarrChannelIdentityReconciler reconciler,
             ILogger logger)
             : base(pluginInfo.Id)
         {
             this.pluginInfo = pluginInfo;
-            this.applicationHost = applicationHost;
+            this.plugin = plugin;
+            this.taskManager = taskManager;
+            this.reconciler = reconciler;
             this.logger = logger;
 
-            this.PageInfo = new PluginPageInfo
+            PageInfo = new PluginPageInfo
             {
-                Name = "SyncChannel",
-                EnableInMainMenu = false,
-                DisplayName = "Poster To Folder",
-                MenuIcon = "image",
-                IsMainConfigPage = true
+                Name = "ChannelSync",
+                EnableInMainMenu = true,
+                DisplayName = "Channel Sync",
+                MenuIcon = "upcoming",
+                IsMainConfigPage = true,
             };
         }
 
-
         public override PluginPageInfo PageInfo { get; }
-
 
         public override Task<IPluginUIView> CreateDefaultPageView()
         {
-            IPluginUIView view =
-                new ConfigPageView(
-                    this.pluginInfo,
-                    this.applicationHost,
-                    this.logger);
-
+            IPluginUIView view = new ConfigurationPageView(
+                pluginInfo, plugin, taskManager, reconciler, logger);
             return Task.FromResult(view);
         }
-
-
-        public IReadOnlyList<IPluginUIPageController> TabPageControllers =>
-            this.tabPages.AsReadOnly();
     }
 }

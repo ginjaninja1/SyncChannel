@@ -1,51 +1,55 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
-    <AssemblyName>SyncChannel</AssemblyName>
-    <RootNamespace>SyncChannel</RootNamespace>
-    <LangVersion>latest</LangVersion>
-	  <Version>0.0.0.1</Version>
-	  <Nullable>annotations</Nullable>
-    
-    
-  </PropertyGroup>
-
-	<!-- FIXED: Debug mode now turns off Optimization so breakpoints work properly -->
-	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
-		<DebugType>portable</DebugType>
-		<Optimize>False</Optimize>
-	</PropertyGroup>
-
-	<!-- FIXED: Release mode now turns on Optimization -->
-	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
-		<DebugType>none</DebugType>
-		<Optimize>True</Optimize>
-	</PropertyGroup>
-	<ItemGroup>
-	  <None Remove="Handover.md" />
-	  <None Remove="Readme.md" />
-	</ItemGroup>
-	
-  <ItemGroup>
-	  <PackageReference Include="MediaBrowser.Server.Core" Version="4.9.1.90" />
-    	  <PackageReference Include="System.Memory" Version="4.6.0" />
-  </ItemGroup>
-	<ItemGroup>
-		<EmbeddedResource Include="thumb.png">
-			<LogicalName>$(RootNamespace).thumb.png</LogicalName>
-		</EmbeddedResource>
-	</ItemGroup>
-
 	<PropertyGroup>
 		<TargetFramework>netstandard2.0</TargetFramework>
-		<!-- Add this line below to suppress the deps.json file -->
-		<GenerateDependencyFile>false</GenerateDependencyFile>
+		<AssemblyName>Emby.SyncChannel</AssemblyName>
+		<RootNamespace>SyncChannel</RootNamespace>
+		<LangVersion>latest</LangVersion>
+		<Version>0.1.0.0</Version>
 	</PropertyGroup>
+	<ItemGroup>
+	  <Compile Remove="UIBaseClasses\UIBaseClasses.cs" />
+	</ItemGroup>
+	<ItemGroup>
+	  <None Remove="ComingSoonChannel.png" />
+	  <None Remove="ComingSoonChannel2.png" />
+	  <None Remove="thumb.png" />
+	  <None Remove="comingsoon.mp4" />
+	  <None Remove="Rules\WebUI\rulesPage.html" />
+	  <None Remove="Rules\WebUI\rulesPage.js" />
+	</ItemGroup>
+	<!--
+    Point $(EmbyServerPath) at your Emby Server installation's system/ folder.
+    Set it in Directory.Build.props alongside the solution, e.g.:
+      <EmbyServerPath>C:\Program Files\Emby-Server\system</EmbyServerPath>
+  -->
+	<!--
+    thumb.png and comingsoon.mp4 are NOT included in this handoff (binary
+    assets aren't part of the chat transcript this project was generated
+    from). Copy them from the ManageComingSoon project root into this
+    project's root before building — same files, reused as-is. The
+    Condition="Exists(...)" guards mean the project still builds without
+    them (GetThumbImage/stub resolution just falls back to Stream.Null /
+    "resource not found", logged as a Warn) so this isn't a hard blocker,
+    but the channel will have no thumb and no default placeholder video
+    until they're added.
+  -->
+	<ItemGroup>
+		<EmbeddedResource Include="ComingSoonChannel2.png" />
+		<EmbeddedResource Include="thumb.png" Condition="Exists('thumb.png')" />
+		<EmbeddedResource Include="comingsoon.mp4" Condition="Exists('comingsoon.mp4')" />
+		<EmbeddedResource Include="Rules\WebUI\rulesPage.html" />
+		<EmbeddedResource Include="Rules\WebUI\rulesPage.js" />
+	</ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="MediaBrowser.Server.Core" Version="4.9.1.90" />
+		<PackageReference Include="System.Memory" Version="4.6.3" />
+		<PackageReference Include="System.Text.Json" Version="8.0.5" />
+	</ItemGroup>
+	<!-- Optional: auto-copy the DLL to your plugins folder after build.
+	     Uncomment and set your own destination path. -->
 	
 	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
-		<Exec Command="xcopy &quot;$(TargetDir)$(TargetName).*&quot; &quot;$(APPDATA)\Emby-Server\programdata\plugins\&quot; /Y" />
+		<Exec Command="xcopy &quot;$(TargetPath)&quot; &quot;\\x670e\C\Users\Nicholas Bird\AppData\Roaming\Emby-Server\programdata\plugins\&quot; /Y" />
 	</Target>
-
-
+	
 </Project>
