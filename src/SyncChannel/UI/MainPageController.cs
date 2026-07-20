@@ -9,24 +9,19 @@ namespace SyncChannel.UI
     using MediaBrowser.Model.Plugins.UI.Views;
     using MediaBrowser.Model.Tasks;
 
-    // Unlike ManageComingSoon's MainPageController, this plugin has only one
-    // settings surface (Configuration) — the Rules editor is served as its
-    // own standalone page via IHasWebPages, independent of this controller.
-    // So no tab machinery (IHasTabbedUIPages / TabPageController) is needed
-    // here at all — just a single IsMainConfigPage page.
     internal class MainPageController : ControllerBase
     {
         private readonly PluginInfo pluginInfo;
         private readonly SyncChannelPlugin plugin;
         private readonly ITaskManager taskManager;
-        private readonly RadarrChannelIdentityReconciler reconciler;
+        private readonly ChannelIdentityReconciler reconciler;
         private readonly ILogger logger;
 
         public MainPageController(
             PluginInfo pluginInfo,
             SyncChannelPlugin plugin,
             ITaskManager taskManager,
-            RadarrChannelIdentityReconciler reconciler,
+            ChannelIdentityReconciler reconciler,
             ILogger logger)
             : base(pluginInfo.Id)
         {

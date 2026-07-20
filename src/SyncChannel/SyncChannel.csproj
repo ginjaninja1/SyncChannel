@@ -4,20 +4,25 @@
 		<AssemblyName>Emby.SyncChannel</AssemblyName>
 		<RootNamespace>SyncChannel</RootNamespace>
 		<LangVersion>latest</LangVersion>
-		<Version>0.2.0.0</Version>
+		<Version>0.3.0.0</Version>
 	</PropertyGroup>
 	<ItemGroup>
-	  <Compile Remove="UIBaseClasses\UIBaseClasses.cs" />
+		<Compile Remove="Channels\RadarrComingSoonChannel.cs" />
+		<Compile Remove="Configuration\ConfigurationPageView - Copy.cs" />
+		<Compile Remove="Models\RadarrChannelCache.cs" />
+		<Compile Remove="Rules\RadarrFieldAccessors.cs" />
+		<Compile Remove="ScheduledTasks\RadarrChannelSyncTask.cs" />
+		<Compile Remove="ScheduledTasks\RadarrDiagnosticsTask.cs" />
+		<Compile Remove="Services\RadarrClient.cs" />
+		<Compile Remove="UIBaseClasses\UIBaseClasses.cs" />
 	</ItemGroup>
 	<ItemGroup>
-	  <None Remove="ComingSoonChannel.png" />
-	  <None Remove="ComingSoonChannel2.png" />
-	  <None Remove="thumb.png" />
-	  <None Remove="comingsoon.mp4" />
-	  <None Remove="Rules\WebUI\rulesPage.html" />
-	  <None Remove="Rules\WebUI\rulesPage.js" />
-	  <None Remove="Rules\WebUI\folderTreePage.html" />
-	  <None Remove="Rules\WebUI\folderTreePage.js" />
+		<None Remove="ComingSoonChannel.png" />
+		<None Remove="ComingSoonChannel2.png" />
+		<None Remove="thumb.png" />
+		<None Remove="comingsoon.mp4" />
+		<None Remove="Rules\WebUI\manageComingSoonPage.html" />
+		<None Remove="Rules\WebUI\manageComingSoonPage.js" />
 	</ItemGroup>
 	<!--
     Point $(EmbyServerPath) at your Emby Server installation's system/ folder.
@@ -28,10 +33,8 @@
 		<EmbeddedResource Include="ComingSoonChannel2.png" />
 		<EmbeddedResource Include="thumb.png" Condition="Exists('thumb.png')" />
 		<EmbeddedResource Include="comingsoon.mp4" Condition="Exists('comingsoon.mp4')" />
-		<EmbeddedResource Include="Rules\WebUI\rulesPage.html" />
-		<EmbeddedResource Include="Rules\WebUI\rulesPage.js" />
-		<EmbeddedResource Include="Rules\WebUI\folderTreePage.html" />
-		<EmbeddedResource Include="Rules\WebUI\folderTreePage.js" />
+		<EmbeddedResource Include="Rules\WebUI\manageComingSoonPage.html" />
+		<EmbeddedResource Include="Rules\WebUI\manageComingSoonPage.js" />
 	</ItemGroup>
 	<ItemGroup>
 		<PackageReference Include="MediaBrowser.Server.Core" Version="4.9.1.90" />
@@ -40,9 +43,9 @@
 	</ItemGroup>
 	<!-- Optional: auto-copy the DLL to your plugins folder after build.
 	     Uncomment and set your own destination path. -->
-	
+
 	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
 		<Exec Command="xcopy &quot;$(TargetPath)&quot; &quot;\\x670e\C\Users\Nicholas Bird\AppData\Roaming\Emby-Server\programdata\plugins\&quot; /Y" />
 	</Target>
-	
+
 </Project>

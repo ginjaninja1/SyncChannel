@@ -36,26 +36,12 @@ namespace SyncChannel.Fetching
     /// </summary>
     public class FetchedItem
     {
-        /// <summary>
-        /// The provider's own permanent identity for this item (e.g. Radarr's
-        /// TitleSlug). Must be stable across fetches — see the TitleSlug
-        /// identity discussion in Evidence.md for why this matters: Emby
-        /// keys persisted channel items off ChannelItemInfo.Id, which is
-        /// built from this value.
-        /// </summary>
         public string StableId { get; set; } = string.Empty;
-
         public string Title { get; set; } = string.Empty;
         public string OriginalTitle { get; set; } = string.Empty;
         public int? Year { get; set; }
         public string Overview { get; set; } = string.Empty;
         public string PosterUrl { get; set; }
-
-        /// <summary>
-        /// Recognised keys ("Tmdb", "Imdb") are surfaced by Emby's own UI.
-        /// Provider-specific keys (e.g. "RadarrId", "SonarrId") are used by
-        /// that provider's own IExternalId implementation for click-through.
-        /// </summary>
         public Dictionary<string, string> ProviderIds { get; set; } = new Dictionary<string, string>();
     }
 

@@ -15,15 +15,14 @@
     using System.Linq;
 
     /// <summary>
-    /// Owns all Channel BaseItem identity bookkeeping — applying the
-    /// identity tag, reapplying the channel image, and finding/deleting
-    /// orphaned Channel DB rows left behind by a rename. Kept under a
-    /// Radarr-prefixed name for this pass even though nothing in its body is
-    /// actually Radarr-specific — see the project migration notes for why a
-    /// source-agnostic rename was deferred until a second source (e.g.
-    /// Sonarr) actually exists to share it with.
+    /// Owns all Channel BaseItem identity bookkeeping for the (single,
+    /// name-configurable) Sync Channel — applying the identity tag,
+    /// reapplying the channel image, and finding/deleting orphaned Channel
+    /// DB rows left behind by a rename. Generalized from the original
+    /// Radarr-specific reconciler — nothing here is provider-specific,
+    /// since SyncFolderChannel isn't tied to any one provider.
     /// </summary>
-    public class RadarrChannelIdentityReconciler
+    public class ChannelIdentityReconciler
     {
         private const string ThumbResourceName = "SyncChannel.thumb.png";
         private const string ThumbCacheFileName = "channel-thumb.png";
@@ -34,7 +33,7 @@
         private readonly IApplicationPaths appPaths;
         private readonly ILogger logger;
 
-        public RadarrChannelIdentityReconciler(
+        public ChannelIdentityReconciler(
             IChannelManager channelManager,
             ILibraryManager libraryManager,
             IImageProcessor imageProcessor,
@@ -50,22 +49,21 @@
 
         /// <summary>
         /// Full reconciliation pass: tags/images the current channel entry
-        /// (matched by config.RadarrChannelName) and deletes any other
-        /// Channel item carrying config.RadarrChannelIdentityTag that isn't
-        /// the current one.
+        /// (matched by config.ChannelName) and deletes any other Channel
+        /// item carrying config.ChannelIdentityTag that isn't the current one.
         /// </summary>
         public void Reconcile(PluginConfiguration config)
         {
-            ReconcileInternal(config, config.RadarrChannelIdentityTag, applyToCurrent: true);
+            ReconcileInternal(config, config.ChannelIdentityTag, applyToCurrent: true);
         }
 
         /// <summary>
         /// Cleanup-only pass, keyed off an explicit tag value rather than
-        /// config.RadarrChannelIdentityTag. Call this BEFORE writing a new
-        /// identity tag into config, passing the OLD tag value, so any
-        /// orphans still carrying the old tag get a chance to be found and
-        /// deleted. Does not tag or image anything — that happens on the
-        /// subsequent normal Reconcile() call with the new tag.
+        /// config.ChannelIdentityTag. Call this BEFORE writing a new identity
+        /// tag into config, passing the OLD tag value, so any orphans still
+        /// carrying the old tag get a chance to be found and deleted. Does
+        /// not tag or image anything — that happens on the subsequent normal
+        /// Reconcile() call with the new tag.
         /// </summary>
         public void CleanupOrphansForTag(PluginConfiguration config, string tag)
         {
@@ -98,7 +96,7 @@
             }
 
             var current = taggedChannelItems.FirstOrDefault(i =>
-                string.Equals(i.Name, config.RadarrChannelName, StringComparison.OrdinalIgnoreCase));
+                string.Equals(i.Name, config.ChannelName, StringComparison.OrdinalIgnoreCase));
 
             if (current == null && applyToCurrent)
             {
@@ -107,7 +105,7 @@
                     var allChannelsQuery = new InternalItemsQuery
                     {
                         IncludeItemTypes = new[] { "Channel" },
-                        Name = config.RadarrChannelName
+                        Name = config.ChannelName
                     };
 
                     current = libraryManager.GetItemsResult(allChannelsQuery).Items.FirstOrDefault();
@@ -131,7 +129,7 @@
                 {
                     logger.Warn(
                         "ChannelSync: No Channel item found matching current name '{0}' — tag/image not applied this run. Expected on the very first sync before Emby has persisted the channel.",
-                        config.RadarrChannelName);
+                        config.ChannelName);
                 }
             }
 
@@ -142,13 +140,13 @@
                     channelManager.DeleteItem(orphan).GetAwaiter().GetResult();
 
                     logger.Info(
-                        "ChannelSync: Orphaned Radarr channel entry deleted — Name='{0}', InternalId={1}, Tag='{2}'.",
+                        "ChannelSync: Orphaned Sync Channel entry deleted — Name='{0}', InternalId={1}, Tag='{2}'.",
                         orphan.Name, orphan.InternalId, tag);
                 }
                 catch (Exception ex)
                 {
                     logger.ErrorException(
-                        "ChannelSync: Failed to delete orphaned Radarr channel entry — Name='{0}', InternalId={1}.",
+                        "ChannelSync: Failed to delete orphaned Sync Channel entry — Name='{0}', InternalId={1}.",
                         ex, orphan.Name, orphan.InternalId);
                 }
             }
@@ -164,7 +162,7 @@
             var tags = item.Tags != null ? new List<string>(item.Tags) : new List<string>();
             bool changed = false;
 
-            var lastApplied = config.RadarrChannelIdentityTagLastApplied;
+            var lastApplied = config.ChannelIdentityTagLastApplied;
             if (!string.IsNullOrEmpty(lastApplied) &&
                 !string.Equals(lastApplied, identityTag, StringComparison.OrdinalIgnoreCase))
             {
@@ -195,7 +193,7 @@
 
             libraryManager.UpdateItem(item, item.GetParent(), ItemUpdateType.MetadataEdit, null);
 
-            config.RadarrChannelIdentityTagLastApplied = identityTag;
+            config.ChannelIdentityTagLastApplied = identityTag;
             SyncChannelPlugin.Instance.UpdateConfiguration(config);
 
             logger.Info("ChannelSync: Identity tag '{0}' applied to '{1}'.", identityTag, item.Name);

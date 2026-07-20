@@ -17,13 +17,9 @@ namespace SyncChannel.Configuration
     public class FolderNode
     {
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
-
         public string DisplayName { get; set; } = string.Empty;
-
         public bool IsRoot { get; set; }
-
         public List<FetchRuleInstance> Fetches { get; set; } = new List<FetchRuleInstance>();
-
         public List<FolderNode> Children { get; set; } = new List<FolderNode>();
     }
 
@@ -31,20 +27,17 @@ namespace SyncChannel.Configuration
     {
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
 
-        /// <summary>Resolved against FetchProviderRegistry — e.g. "radarr".</summary>
-        public string ProviderKey { get; set; } = string.Empty;
+        // Replaces the old ProviderKey + free-form Settings bag. A fetch is
+        // now just three references — connection, schema, rule set — which
+        // is also what makes the UI's "only the rule set usually changes"
+        // goal possible: editing a fetch is picking from three dropdowns,
+        // not filling in a form.
+        public string ConnectionId { get; set; } = string.Empty;
+        public string EndpointSchemaId { get; set; } = string.Empty;
+        public string RuleSetId { get; set; } = string.Empty;
 
         public bool Enabled { get; set; } = true;
-
-        /// <summary>User-editable label shown in the admin tree UI, e.g. "Radarr Sync #1".</summary>
         public string DisplayLabel { get; set; } = string.Empty;
-
-        /// <summary>
-        /// Provider-owned field bag. Never interpreted by folder-tree or
-        /// channel code — only the matching IFetchProvider reads these keys,
-        /// per its own GetFieldSchema().
-        /// </summary>
-        public Dictionary<string, string> Settings { get; set; } = new Dictionary<string, string>();
     }
 
     public class FolderTreeFile

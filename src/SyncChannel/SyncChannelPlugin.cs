@@ -2,7 +2,6 @@ namespace SyncChannel
 {
     using SyncChannel.Configuration;
     using SyncChannel.Services;
-    using SyncChannel.UI;
     using MediaBrowser.Common.Configuration;
     using MediaBrowser.Common.Plugins;
     using MediaBrowser.Controller;
@@ -21,14 +20,13 @@ namespace SyncChannel
 
     public class SyncChannelPlugin : BasePlugin<PluginConfiguration>, IHasThumbImage, IHasUIPages, IHasWebPages
     {
-        // Unchanged from the existing repo file.
         private static readonly Guid PluginId = new Guid("6b2e4f17-9a3c-4d8b-8e1f-2c7a5b9d3e60");
 
         private readonly IServerApplicationHost appHost;
         private readonly ITaskManager taskManager;
         private readonly ILogger logger;
         private List<IPluginUIPageController> pages;
-        private RadarrChannelIdentityReconciler reconcilerInstance;
+        private ChannelIdentityReconciler reconcilerInstance;
 
         public static SyncChannelPlugin Instance { get; private set; }
 
@@ -49,10 +47,7 @@ namespace SyncChannel
         public override Guid Id => PluginId;
         public override string Name => "Channel Sync";
         public override string Description =>
-            "Surfaces monitored-but-not-yet-downloaded Radarr movies as an Emby channel, " +
-            "with automatic add/remove sync and a configurable placeholder video. Also " +
-            "provides an admin-organized folder tree ('Coming Soon' channel) supporting " +
-            "multiple fetch sources (Radarr, Sonarr, etc) per folder.";
+            "Surfaces monitored-but-not-yet-downloaded items from Radarr, Sonarr, or any similar REST API as an Emby channel, organized into an admin-defined, renameable folder tree, with configurable connections, endpoint schemas, and rule sets.";
 
         public ImageFormat ThumbImageFormat => ImageFormat.Png;
 
@@ -63,42 +58,22 @@ namespace SyncChannel
                    ?? Stream.Null;
         }
 
-        // -----------------------------------------------------------------
-        // IHasWebPages — serves both the existing Radarr Rules editor and
-        // the new folder-tree editor as raw embedded HTML/JS pages. Same
-        // confirmed-working IHasWebPages/EmbeddedResourcePath pattern for
-        // both — see Evidence.md's "Custom Plugin Pages via IHasWebPages"
-        // section.
-        // -----------------------------------------------------------------
         public IEnumerable<PluginPageInfo> GetPages()
         {
             return new[]
             {
                 new PluginPageInfo
                 {
-                    Name = "RadarrRulesPage",
-                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.rulesPage.html",
-                    EnableInMainMenu = true,
-                    DisplayName = "Radarr Coming Soon Rules",
-                    MenuIcon = "rule_folder"
-                },
-                new PluginPageInfo
-                {
-                    Name = "RadarrRulesPageJs",
-                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.rulesPage.js"
-                },
-                new PluginPageInfo
-                {
-                    Name = "FolderTreePage",
-                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.folderTreePage.html",
-                    EnableInMainMenu = true,
-                    DisplayName = "Coming Soon Folder Tree",
+                    Name = "ManageComingSoonPage",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.manageComingSoonPage.html",
+                    EnableInMainMenu = false,
+                    DisplayName = "Manage Coming Soon",
                     MenuIcon = "folder_special"
                 },
                 new PluginPageInfo
                 {
-                    Name = "FolderTreePageJs",
-                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.folderTreePage.js"
+                    Name = "ManageComingSoonPageJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.manageComingSoonPage.js"
                 }
             };
         }
@@ -116,14 +91,14 @@ namespace SyncChannel
 
                     if (this.reconcilerInstance == null)
                     {
-                        this.reconcilerInstance = new RadarrChannelIdentityReconciler(
+                        this.reconcilerInstance = new ChannelIdentityReconciler(
                             channelManager, libraryManager, imageProcessor,
                             appPaths, this.logger);
                     }
 
                     this.pages = new List<IPluginUIPageController>
                     {
-                        new MainPageController(
+                        new UI.MainPageController(
                             GetPluginInfo(),
                             this,
                             this.taskManager,

@@ -1,33 +1,20 @@
 namespace SyncChannel.ScheduledTasks
 {
+    using MediaBrowser.Controller.Channels;
+    using MediaBrowser.Model.Logging;
+    using MediaBrowser.Model.Tasks;
     using SyncChannel.Channels;
     using SyncChannel.Configuration;
     using SyncChannel.Fetching;
     using SyncChannel.Models;
+    using SyncChannel.Rules;
     using SyncChannel.Services;
-    using MediaBrowser.Controller.Channels;
-    using MediaBrowser.Model.Logging;
-    using MediaBrowser.Model.Tasks;
     using System;
     using System.Collections.Generic;
     using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
 
-    /// <summary>
-    /// Walks the admin-defined folder tree depth-first. For each node, runs
-    /// every enabled FetchRuleInstance through the provider registry and
-    /// writes the merged results to that node's own cache file. One
-    /// GetChannelItems call at browse/refresh time then only ever needs to
-    /// read the single cache file for the folder being viewed — see
-    /// SyncFolderChannel.GetChannelItems.
-    ///
-    /// A failed fetch (provider returns null) leaves that node's existing
-    /// cache untouched for that provider's contribution — same "null means
-    /// skip, never zero" contract already established for the flat
-    /// Radarr channel in Evidence.md, now per-fetch-instance rather than
-    /// per-whole-channel.
-    /// </summary>
     public class FolderTreeSyncTask : IScheduledTask
     {
         private const string RefreshChannelsTaskKey = "RefreshInternetChannels";
@@ -35,38 +22,52 @@ namespace SyncChannel.ScheduledTasks
 
         private readonly FolderTreeStore treeStore;
         private readonly FolderCacheStore cacheStore;
-        private readonly FetchProviderRegistry registry;
+        private readonly ConnectionsStore connectionsStore;
+        private readonly EndpointSchemaStore schemaStore;
+        private readonly RuleSetStore ruleSetStore;
+        private readonly HttpFetchProvider fetchProvider;
+        private readonly Services.LastResponseCacheStore lastResponseStore;
         private readonly IChannelManager channelManager;
         private readonly ITaskManager taskManager;
         private readonly ILogger logger;
+        private readonly ChannelIdentityReconciler reconciler;
 
         public FolderTreeSyncTask(
             FolderTreeStore treeStore,
             FolderCacheStore cacheStore,
-            FetchProviderRegistry registry,
+            ConnectionsStore connectionsStore,
+            EndpointSchemaStore schemaStore,
+            RuleSetStore ruleSetStore,
+            HttpFetchProvider fetchProvider,
+            Services.LastResponseCacheStore lastResponseStore,
             IChannelManager channelManager,
             ITaskManager taskManager,
             ILogger logger)
         {
             this.treeStore = treeStore;
             this.cacheStore = cacheStore;
-            this.registry = registry;
+            this.connectionsStore = connectionsStore;
+            this.schemaStore = schemaStore;
+            this.ruleSetStore = ruleSetStore;
+            this.fetchProvider = fetchProvider;
+            this.lastResponseStore = lastResponseStore;
             this.channelManager = channelManager;
             this.taskManager = taskManager;
             this.logger = logger;
+            this.reconciler = reconciler;
         }
 
         public string Name => "Sync Coming Soon Folder Tree";
-
         public string Key => "ChannelSync-FolderTreeSync";
-
         public string Description =>
-            "Runs every configured fetch (Radarr, Sonarr, etc) for every folder in the admin-defined folder tree, updates each folder's cache, and persists the results into Emby.";
-
+            "Runs every configured fetch for every folder in the admin-defined folder tree, updates each folder's cache, and persists the results into Emby. Change the schedule here, in Scheduled Tasks — there is no separate interval setting in plugin config.";
         public string Category => "Channel Sync";
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
+            // Default only — the user can change this from Emby's own
+            // Scheduled Tasks page, and that edit is Emby's to persist, not
+            // ours. No plugin-config interval field to keep in sync anymore.
             yield return new TaskTriggerInfo
             {
                 Type = TaskTriggerInfo.TriggerInterval,
@@ -77,15 +78,14 @@ namespace SyncChannel.ScheduledTasks
         public async Task Execute(CancellationToken cancellationToken, IProgress<double> progress)
         {
             var tree = treeStore.Load();
+            var connections = connectionsStore.Load().Connections.ToDictionary(c => c.Id, c => c, StringComparer.OrdinalIgnoreCase);
+            var schemas = schemaStore.Load().Schemas.ToDictionary(s => s.Id, s => s, StringComparer.OrdinalIgnoreCase);
+            var ruleSets = ruleSetStore.Load().RuleSets.ToDictionary(r => r.Id, r => r, StringComparer.OrdinalIgnoreCase);
 
             var allFolderIds = new List<string>();
-            await SyncNode(tree.RootFolder, allFolderIds, cancellationToken).ConfigureAwait(false);
+            await SyncNode(tree.RootFolder, connections, schemas, ruleSets, allFolderIds, cancellationToken).ConfigureAwait(false);
 
-            // Prune cache files for folders that no longer exist (e.g. an
-            // admin removed a subfolder since the last run) — harmless if
-            // skipped, but keeps disk state honest.
             cacheStore.DeleteOrphans(allFolderIds);
-
             progress.Report(50);
 
             var channel = channelManager.GetChannel<SyncFolderChannel>();
@@ -97,97 +97,136 @@ namespace SyncChannel.ScheduledTasks
 
             try
             {
-                await channelManager
-                    .RefreshChannelContent(channel, maxRefreshLevel: 8, restrictTopLevelFolderId: null, cancellationToken)
-                    .ConfigureAwait(false);
+                await channelManager.RefreshChannelContent(channel, 8, null, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                logger.ErrorException("ChannelSync: RefreshChannelContent failed for SyncFolderChannel", ex);
+                logger.ErrorException("ChannelSync: RefreshChannelContent failed", ex);
             }
 
             progress.Report(80);
-
             await TriggerRefreshInternetChannels().ConfigureAwait(false);
-
             progress.Report(100);
+            reconciler.Reconcile(SyncChannelPlugin.Instance.Configuration);
         }
 
-        private async Task SyncNode(FolderNode node, List<string> allFolderIds, CancellationToken cancellationToken)
+        /// <summary>
+        /// Public, narrower entry point used by ChannelSyncApiSurface for a
+        /// responsive save: re-syncs only the folders that use a given rule
+        /// set, then triggers the same reconciliation. Bounded work — not
+        /// a full tree walk — per the "cheap path" design agreed with the
+        /// operator.
+        /// </summary>
+        public async Task SyncFoldersAndRefresh(IEnumerable<string> folderIds, CancellationToken cancellationToken)
+        {
+            var tree = treeStore.Load();
+            var connections = connectionsStore.Load().Connections.ToDictionary(c => c.Id, c => c, StringComparer.OrdinalIgnoreCase);
+            var schemas = schemaStore.Load().Schemas.ToDictionary(s => s.Id, s => s, StringComparer.OrdinalIgnoreCase);
+            var ruleSets = ruleSetStore.Load().RuleSets.ToDictionary(r => r.Id, r => r, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var folderId in folderIds)
+            {
+                var node = FolderTreeStore.FindNode(tree.RootFolder, folderId);
+                if (node != null)
+                {
+                    await SyncSingleNode(node, connections, schemas, ruleSets, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            var channel = channelManager.GetChannel<SyncFolderChannel>();
+            if (channel != null)
+            {
+                try { await channelManager.RefreshChannelContent(channel, 8, null, cancellationToken).ConfigureAwait(false); }
+                catch (Exception ex) { logger.ErrorException("ChannelSync: RefreshChannelContent failed (responsive save)", ex); }
+            }
+
+            await TriggerRefreshInternetChannels().ConfigureAwait(false);
+        }
+
+        private async Task SyncNode(
+            FolderNode node,
+            Dictionary<string, ConnectionEntry> connections,
+            Dictionary<string, EndpointSchema> schemas,
+            Dictionary<string, RuleSet> ruleSets,
+            List<string> allFolderIds,
+            CancellationToken cancellationToken)
         {
             allFolderIds.Add(node.Id);
-
-            var existingCache = cacheStore.Read(node.Id);
-            var mergedItems = new List<CachedChannelItem>();
-            bool anyFetchAttempted = false;
-            bool anyFetchSucceeded = false;
-
-            foreach (var fetch in node.Fetches.Where(f => f.Enabled))
-            {
-                anyFetchAttempted = true;
-                var provider = registry.Get(fetch.ProviderKey);
-
-                if (provider == null)
-                {
-                    logger.Warn(
-                        "ChannelSync: Folder '{0}' fetch '{1}' references unknown provider '{2}' — skipping.",
-                        node.DisplayName, fetch.DisplayLabel, fetch.ProviderKey);
-                    continue;
-                }
-
-                IReadOnlyList<FetchedItem> results;
-                try
-                {
-                    results = await provider.FetchAsync(fetch.Settings, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    logger.ErrorException(
-                        "ChannelSync: Fetch '{0}' ({1}) in folder '{2}' threw — treating as failed, leaving prior results for this fetch untouched",
-                        ex, fetch.DisplayLabel, fetch.ProviderKey, node.DisplayName);
-                    results = null;
-                }
-
-                if (results == null)
-                {
-                    // This specific fetch failed — carry forward whatever
-                    // this provider previously contributed to this folder,
-                    // rather than dropping it (null must never mean "zero").
-                    var priorFromThisProvider = existingCache.Items
-                        .Where(i => string.Equals(i.ProviderKey, fetch.ProviderKey, StringComparison.OrdinalIgnoreCase));
-                    mergedItems.AddRange(priorFromThisProvider);
-                    continue;
-                }
-
-                anyFetchSucceeded = true;
-                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.ProviderKey)));
-            }
-
-            if (anyFetchAttempted)
-            {
-                var newCache = new FolderCache
-                {
-                    Items = mergedItems,
-                    LastSyncSucceeded = anyFetchSucceeded,
-                    LastSyncUtc = DateTimeOffset.UtcNow,
-                    StubVideoPath = existingCache.StubVideoPath // stub resolution owned elsewhere; preserved as-is here
-                };
-                cacheStore.Write(node.Id, newCache);
-
-                logger.Info(
-                    "ChannelSync: Folder '{0}' synced — {1} item(s) across {2} fetch(es).",
-                    node.DisplayName, mergedItems.Count, node.Fetches.Count(f => f.Enabled));
-            }
+            await SyncSingleNode(node, connections, schemas, ruleSets, cancellationToken).ConfigureAwait(false);
 
             foreach (var child in node.Children)
             {
-                await SyncNode(child, allFolderIds, cancellationToken).ConfigureAwait(false);
+                await SyncNode(child, connections, schemas, ruleSets, allFolderIds, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        private static CachedChannelItem ToCache(FetchedItem item, string providerKey) => new CachedChannelItem
+        private async Task SyncSingleNode(
+            FolderNode node,
+            Dictionary<string, ConnectionEntry> connections,
+            Dictionary<string, EndpointSchema> schemas,
+            Dictionary<string, RuleSet> ruleSets,
+            CancellationToken cancellationToken)
         {
-            ProviderKey = providerKey,
+            var existingCache = cacheStore.Read(node.Id);
+            var mergedItems = new List<CachedChannelItem>();
+            bool anyAttempted = false, anySucceeded = false;
+
+            foreach (var fetch in node.Fetches.Where(f => f.Enabled))
+            {
+                anyAttempted = true;
+
+                if (!connections.TryGetValue(fetch.ConnectionId, out var connection) ||
+                    !schemas.TryGetValue(fetch.EndpointSchemaId, out var schema) ||
+                    !ruleSets.TryGetValue(fetch.RuleSetId, out var ruleSet))
+                {
+                    logger.Warn("ChannelSync: Folder '{0}' fetch '{1}' references a missing connection/schema/rule set — skipping.", node.DisplayName, fetch.DisplayLabel);
+                    continue;
+                }
+
+                var rawJson = await fetchProvider.FetchRawAsync(connection, schema, cancellationToken).ConfigureAwait(false);
+
+                if (rawJson == null)
+                {
+                    // Fetch failed — carry forward this fetch's prior contribution.
+                    mergedItems.AddRange(existingCache.Items.Where(i => string.Equals(i.ProviderKey, fetch.Id, StringComparison.OrdinalIgnoreCase)));
+                    continue;
+                }
+
+                lastResponseStore.Write(connection.Id, schema.Id, rawJson);
+
+                var results = fetchProvider.EvaluateAndMap(rawJson, connection, schema, ruleSet.Root);
+
+                if (results == null)
+                {
+                    mergedItems.AddRange(existingCache.Items.Where(i => string.Equals(i.ProviderKey, fetch.Id, StringComparison.OrdinalIgnoreCase)));
+                    continue;
+                }
+
+                anySucceeded = true;
+                // ProviderKey now stores the FetchRuleInstance.Id — the
+                // per-fetch key needed to carry forward this specific
+                // fetch's contribution on a future partial failure (a
+                // folder can have multiple fetches against the same schema).
+                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id)));
+            }
+
+            if (anyAttempted)
+            {
+                cacheStore.Write(node.Id, new FolderCache
+                {
+                    Items = mergedItems,
+                    LastSyncSucceeded = anySucceeded,
+                    LastSyncUtc = DateTimeOffset.UtcNow,
+                    StubVideoPath = existingCache.StubVideoPath
+                });
+
+                logger.Info("ChannelSync: Folder '{0}' synced — {1} item(s).", node.DisplayName, mergedItems.Count);
+            }
+        }
+
+        private static CachedChannelItem ToCache(FetchedItem item, string fetchInstanceId) => new CachedChannelItem
+        {
+            ProviderKey = fetchInstanceId,
             StableId = item.StableId,
             Title = item.Title,
             OriginalTitle = item.OriginalTitle,
@@ -201,18 +240,17 @@ namespace SyncChannel.ScheduledTasks
         {
             try
             {
-                var refreshWorker = taskManager.ScheduledTasks
+                var worker = taskManager.ScheduledTasks
                     .FirstOrDefault(w => string.Equals(w.ScheduledTask?.Key, RefreshChannelsTaskKey, StringComparison.OrdinalIgnoreCase))
-                    ?? taskManager.ScheduledTasks
-                        .FirstOrDefault(w => string.Equals(w.Name, RefreshChannelsTaskName, StringComparison.OrdinalIgnoreCase));
+                    ?? taskManager.ScheduledTasks.FirstOrDefault(w => string.Equals(w.Name, RefreshChannelsTaskName, StringComparison.OrdinalIgnoreCase));
 
-                if (refreshWorker == null)
+                if (worker == null)
                 {
-                    logger.Warn("ChannelSync: Could not find the built-in channel-refresh task — folder tree changes will only appear once it next runs on its own schedule.");
+                    logger.Warn("ChannelSync: Could not find the built-in channel-refresh task.");
                     return;
                 }
 
-                await taskManager.Execute(refreshWorker, new TaskOptions()).ConfigureAwait(false);
+                await taskManager.Execute(worker, new TaskOptions()).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

@@ -1,21 +1,3 @@
-// A new, separate IChannel implementation for the admin-defined folder
-// tree. Deliberately NOT a modification of RadarrComingSoonChannel — that
-// class keeps working exactly as before, unchanged, as the simple flat
-// single-provider channel. This is the tree-aware channel, registered
-// alongside it (auto-discovery picks up both — see Evidence.md's Channel
-// Registration section; nothing extra needed).
-//
-// Every behavior here follows directly from the confirmed platform mechanics
-// in Evidence.md's "Channel Subfolders" section:
-//   - InternalChannelItemQuery.FolderId is exactly the ChannelItemInfo.Id
-//     previously returned for that folder -> BuildFolderItemId/ParseFolderNodeId
-//     round-trip a FolderNode.Id through it.
-//   - Folder items use Type=Folder, FolderType=Container for plain
-//     admin-created folders (maps to a generic Folder BaseItem, not Series/
-//     Season/PhotoAlbum).
-//   - Reconciliation happens per-parent-folder in Emby's own ChannelManager,
-//     so this class only ever needs to return the direct children of
-//     whichever FolderId it was asked about — never the whole tree at once.
 namespace SyncChannel.Channels
 {
     using SyncChannel.Configuration;
@@ -59,12 +41,11 @@ namespace SyncChannel.Channels
             this.logger = logger;
         }
 
-        // Fixed name (not read from config) — unlike RadarrComingSoonChannel,
-        // this channel's identity isn't tied to a single provider's display
-        // name, so there's no "rename creates an orphan" concern to manage
-        // here the way RadarrChannelIdentityReconciler handles for the
-        // single-provider channel.
-        public string Name => "Coming Soon";
+        // Restored: reads from config again, same as the original Radarr
+        // channel's RadarrChannelName. A rename orphans the old Channel DB
+        // row — ChannelIdentityReconciler (wired via FolderTreeSyncTask and
+        // ConfigurationPageView's debounce) is what cleans that up.
+        public string Name => SyncChannelPlugin.Instance.Configuration.ChannelName;
 
         public string Description => "Admin-organized coming-soon folders, synced from Radarr/Sonarr and other configured sources.";
 
@@ -112,15 +93,11 @@ namespace SyncChannel.Channels
 
             var items = new List<ChannelItemInfo>();
 
-            // Child folders first.
             foreach (var child in targetNode.Children)
             {
                 items.Add(BuildFolderItem(child));
             }
 
-            // Then this node's own fetched media items, from its own cache
-            // file only — never the whole tree. Cheap, and matches how
-            // Emby's own reconciliation is scoped (see Evidence.md).
             var cache = cacheStore.Read(targetNode.Id);
             foreach (var cached in cache.Items)
             {
@@ -160,15 +137,6 @@ namespace SyncChannel.Channels
             return Task.FromResult<IEnumerable<MediaSourceInfo>>(new List<MediaSourceInfo> { source });
         }
 
-        // -----------------------------------------------------------------
-        // Id encoding. Folder ids and item ids share one Id-space
-        // (InternalChannelItemQuery.FolderId is only ever set to a value
-        // this class previously returned as a folder item's Id — see
-        // Evidence.md) but need to be told apart on the way back in, and an
-        // item id also needs to carry which folder's cache it lives in so
-        // GetChannelItemMediaInfo doesn't have to search the whole tree.
-        // -----------------------------------------------------------------
-
         internal static string BuildFolderItemId(string folderNodeId) => FolderIdPrefix + folderNodeId;
 
         private static string ParseFolderNodeId(string channelItemId) =>
@@ -176,10 +144,6 @@ namespace SyncChannel.Channels
                 ? channelItemId.Substring(FolderIdPrefix.Length)
                 : null;
 
-        // Item ids encode both the owning folder and the provider's stable
-        // id: "syncchannel-item-{folderId}::{stableId}". Only this class
-        // ever parses or builds these — GetChannelItemMediaInfo needs the
-        // folder segment to find the right cache file cheaply.
         internal static string BuildItemId(string folderNodeId, string stableId) =>
             ItemIdPrefix + folderNodeId + "::" + stableId;
 
@@ -252,9 +216,6 @@ namespace SyncChannel.Channels
             Name = "Coming Soon"
         };
 
-        // Falls back to the same embedded default stub used by
-        // RadarrComingSoonChannel if a folder's cache hasn't set one yet
-        // (e.g. before the first sync has run for that folder).
         private string ResolveDefaultStubPath()
         {
             const string DefaultStubResourceName = "SyncChannel.comingsoon.mp4";
