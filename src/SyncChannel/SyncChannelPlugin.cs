@@ -21,9 +21,7 @@ namespace SyncChannel
 
     public class SyncChannelPlugin : BasePlugin<PluginConfiguration>, IHasThumbImage, IHasUIPages, IHasWebPages
     {
-        // Freshly generated for this plugin — deliberately NOT the same as
-        // ManageComingSoonPlugin's Guid. The two plugins are unrelated as
-        // far as Emby's plugin registry is concerned.
+        // Unchanged from the existing repo file.
         private static readonly Guid PluginId = new Guid("6b2e4f17-9a3c-4d8b-8e1f-2c7a5b9d3e60");
 
         private readonly IServerApplicationHost appHost;
@@ -52,7 +50,9 @@ namespace SyncChannel
         public override string Name => "Channel Sync";
         public override string Description =>
             "Surfaces monitored-but-not-yet-downloaded Radarr movies as an Emby channel, " +
-            "with automatic add/remove sync and a configurable placeholder video.";
+            "with automatic add/remove sync and a configurable placeholder video. Also " +
+            "provides an admin-organized folder tree ('Coming Soon' channel) supporting " +
+            "multiple fetch sources (Radarr, Sonarr, etc) per folder.";
 
         public ImageFormat ThumbImageFormat => ImageFormat.Png;
 
@@ -64,11 +64,11 @@ namespace SyncChannel
         }
 
         // -----------------------------------------------------------------
-        // IHasWebPages — serves the Radarr Rules editor as a raw embedded
-        // HTML/JS page (token-based drag/drop expression builder). Ported
-        // over unchanged from ManageComingSoon; see that project's
-        // Evidence.md for the confirmed IHasWebPages / EmbeddedResourcePath
-        // pattern this relies on.
+        // IHasWebPages — serves both the existing Radarr Rules editor and
+        // the new folder-tree editor as raw embedded HTML/JS pages. Same
+        // confirmed-working IHasWebPages/EmbeddedResourcePath pattern for
+        // both — see Evidence.md's "Custom Plugin Pages via IHasWebPages"
+        // section.
         // -----------------------------------------------------------------
         public IEnumerable<PluginPageInfo> GetPages()
         {
@@ -86,6 +86,19 @@ namespace SyncChannel
                 {
                     Name = "RadarrRulesPageJs",
                     EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.rulesPage.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "FolderTreePage",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.folderTreePage.html",
+                    EnableInMainMenu = true,
+                    DisplayName = "Coming Soon Folder Tree",
+                    MenuIcon = "folder_special"
+                },
+                new PluginPageInfo
+                {
+                    Name = "FolderTreePageJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.folderTreePage.js"
                 }
             };
         }

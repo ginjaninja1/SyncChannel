@@ -4,7 +4,7 @@
 		<AssemblyName>Emby.SyncChannel</AssemblyName>
 		<RootNamespace>SyncChannel</RootNamespace>
 		<LangVersion>latest</LangVersion>
-		<Version>0.1.0.0</Version>
+		<Version>0.2.0.0</Version>
 	</PropertyGroup>
 	<ItemGroup>
 	  <Compile Remove="UIBaseClasses\UIBaseClasses.cs" />
@@ -16,22 +16,13 @@
 	  <None Remove="comingsoon.mp4" />
 	  <None Remove="Rules\WebUI\rulesPage.html" />
 	  <None Remove="Rules\WebUI\rulesPage.js" />
+	  <None Remove="Rules\WebUI\folderTreePage.html" />
+	  <None Remove="Rules\WebUI\folderTreePage.js" />
 	</ItemGroup>
 	<!--
     Point $(EmbyServerPath) at your Emby Server installation's system/ folder.
     Set it in Directory.Build.props alongside the solution, e.g.:
       <EmbyServerPath>C:\Program Files\Emby-Server\system</EmbyServerPath>
-  -->
-	<!--
-    thumb.png and comingsoon.mp4 are NOT included in this handoff (binary
-    assets aren't part of the chat transcript this project was generated
-    from). Copy them from the ManageComingSoon project root into this
-    project's root before building — same files, reused as-is. The
-    Condition="Exists(...)" guards mean the project still builds without
-    them (GetThumbImage/stub resolution just falls back to Stream.Null /
-    "resource not found", logged as a Warn) so this isn't a hard blocker,
-    but the channel will have no thumb and no default placeholder video
-    until they're added.
   -->
 	<ItemGroup>
 		<EmbeddedResource Include="ComingSoonChannel2.png" />
@@ -39,6 +30,8 @@
 		<EmbeddedResource Include="comingsoon.mp4" Condition="Exists('comingsoon.mp4')" />
 		<EmbeddedResource Include="Rules\WebUI\rulesPage.html" />
 		<EmbeddedResource Include="Rules\WebUI\rulesPage.js" />
+		<EmbeddedResource Include="Rules\WebUI\folderTreePage.html" />
+		<EmbeddedResource Include="Rules\WebUI\folderTreePage.js" />
 	</ItemGroup>
 	<ItemGroup>
 		<PackageReference Include="MediaBrowser.Server.Core" Version="4.9.1.90" />

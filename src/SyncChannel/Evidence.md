@@ -361,3 +361,90 @@ General debugging discipline for custom plugin pages
 
 IHasWebPages embedded resources (.html/.js) are compiled into the plugin DLL, not served from disk — a browser hard-refresh (even DevTools "disable cache") does not pick up new plugin code. The plugin must be rebuilt and the Emby server restarted before any change is visible, every time. A large share of apparent "the fix didn't work" reports in this session were actually stale-server-code, not real regressions — always confirm via DevTools Sources tab (searching the actually-loaded file for a known-new string/comment) before spending further effort debugging a "still broken" report.
 For anything involving live data shape (matching against a raw API response), a debug JSON view of the exact payload being sent/evaluated — a simple collapsible <pre> populated with JSON.stringify(payload, null, 2) — is disproportionately useful for resolving "is this a client bug or a server bug" questions quickly, versus continued back-and-forth speculation.
+
+
+## Channel Subfolders (Folder-type ChannelItemInfo)
+
+Confirmed via decompilation of `Emby.Server.Implementations.Channels.ChannelManager`
+(the concrete `IChannelManager` implementation).
+
+- `ChannelItemInfo.Type = ChannelItemType.Folder` plus `ChannelItemInfo.FolderType`
+  (a second, separate enum: `Container, MusicAlbum, PhotoAlbum, MusicArtist, Series,
+  Season`) together define a folder item. For a plain admin-defined subfolder
+  (no special media-library semantics), use `FolderType = ChannelFolderType.Container`
+  — this maps to a plain `Folder` BaseItem in `GetChannelItemEntity`
+  (`Series`/`Season`/`PhotoAlbum` map to their respective specialized BaseItem
+  subclasses instead; `Container` is the generic case).
+
+- **`InternalChannelItemQuery.FolderId` is exactly the `ChannelItemInfo.Id` string
+  previously returned for that folder.** Confirmed via `GetChannelItemEntity`
+  (`baseItem.ExternalId = info.Id` on persist) and `GetChannelItemsInternal`
+  (`externalFolderId = parentItem.ExternalId`, passed straight through as
+  `InternalChannelItemQuery.FolderId` on the next call). Applies identically to
+  both live user browse-in and scheduled "Refresh Internet Channels" recursion —
+  there is only one internal call site (`ChannelManager.GetChannelItems`) for both.
+  `FolderId` is `null` for the channel's own root-level `GetChannelItems` call.
+
+- **Recursive refresh walks arbitrary depth, gated by `maxRefreshLevel`.**
+  `RefreshChannel` defaults `maxRefreshLevel = 8` when Emby's own "Refresh
+  Internet Channels" task calls `RefreshChannels()` with no explicit override.
+  `GetAllItems` recurses: query children of the current parent → for each
+  returned folder id, recurse at `currentRefreshLevel + 1`, stopping once
+  `currentRefreshLevel >= maxRefreshLevel`. **Your `GetChannelItems` is called
+  once per folder node in the tree per refresh pass** — an admin-built tree
+  with many subfolders means many separate `GetChannelItems` invocations per
+  cycle. Reinforces Cached mode (read a local per-folder cache; never call
+  Radarr/Sonarr live per node) as the right default for any tree deeper than
+  the flat root case already using it.
+
+- **`RefreshChannelContent`'s `restrictTopLevelFolderId` does NOT skip the root
+  call.** Confirmed: the root call `GetChannelItems(FolderId=null)` always
+  happens first and reconciles the channel's direct/root children regardless
+  of this parameter. Only the subsequent *recursion set* is overridden — Emby
+  looks up a BaseItem by `ExternalId == restrictTopLevelFolderId` (a
+  library-wide lookup, not scoped to this channel specifically) and recurses
+  into only that subtree instead of everything the root call returned. Useful
+  for "refresh just Studio A" but budget for the root fetch always running too.
+
+- **Deletion/reconciliation (implicit, per `Evidence.md`'s existing "Item
+  Removal" section) is scoped per-parent-folder, not global.** In
+  `GetChannelItemsInternal`, the existing-DB-items set being diffed against
+  your returned list is queried with `ParentIds = [thisFoldersInternalId]`
+  (or `Parent = channel` at the true root). An item missing from one folder's
+  `GetChannelItems` response is only ever deleted from that folder — sibling
+  folders' contents are untouched by another folder's sync pass.
+
+- **Folder metadata refresh is selective.** For an existing (already-persisted)
+  folder item with `FolderType == Container`, only `Name` is checked/updated
+  on repeat syncs (cheap rename propagation) — not a full field rewrite like
+  new items get. `_providerManager.QueueRefresh` (Emby's own external
+  metadata-provider pipeline) is only queued for `FolderType` of `Series` or
+  `Season` — **never for `Container`** — so plain admin subfolders are never
+  sent through metadata scraping.
+
+- **Media items do get queued for Emby's own metadata refresh.** Confirmed via
+  `ChannelMediaContentType` ordinals (`Clip=0, Podcast=1, Trailer=2, Movie=3,
+  Episode=4, ...`): `GetChannelItemEntity`'s stale-refresh branch queues
+  `_providerManager.QueueRefresh` only for `Trailer`/`Movie`/`Episode` content
+  types. Since `RadarrComingSoonChannel` items use `ContentType =
+  ChannelMediaContentType.Movie`, they ARE queued for Emby's own metadata
+  provider lookups on refresh — independent of and in addition to whatever
+  data this plugin populates directly. Not previously documented.
+
+- **`IHasChannelFeatures` (optional interface, same opt-in pattern as
+  `IRequiresMediaInfoCallback`/`ISupportsDelete`) is NOT required for a
+  subfolder tree.** `ChannelManager.GetUserViewItems` only branches on it to
+  decide whether to show root-level folders as separate top-level library
+  entries (`ShowRootFoldersAtTopLevel`); without it (current
+  `RadarrComingSoonChannel` state), the channel always presents as a single
+  top-level entry with everything — including any subfolder tree — nested
+  underneath via ordinary folder browsing. This matches "root channel folder
+  always exists, subfolders are purely additive" with zero extra interface work.
+
+- **Server-side media-info caching exists independent of anything this plugin
+  does.** `ChannelManager` holds its own `ConcurrentDictionary` cache of
+  `IRequiresMediaInfoCallback.GetChannelItemMediaInfo` results, keyed by item
+  id, with a confirmed 5-minute TTL (`(DateTimeOffset.UtcNow - cached).TotalMinutes
+  < 5.0`). This is separate from and in addition to `RadarrComingSoonChannel`'s
+  own file-based cache (`RadarrChannelCache`) — the two operate at different
+  layers (playback media-source resolution vs.
