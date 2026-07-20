@@ -1,6 +1,7 @@
 # Emby Evidence Log
 
 Confirmed patterns and class behaviours for use in future Emby plugin development sessions.
+Evidence should be treated as strong guidance, but not as absolute truth — Emby is a moving target and the internal implementation can change at any time.
 
 ## Channel Registration
 
@@ -448,3 +449,23 @@ Confirmed via decompilation of `Emby.Server.Implementations.Channels.ChannelMana
   < 5.0`). This is separate from and in addition to `RadarrComingSoonChannel`'s
   own file-based cache (`RadarrChannelCache`) — the two operate at different
   layers (playback media-source resolution vs.
+
+  DI / constructor injection
+
+Emby's container reliably supports named concrete-class constructor parameters, multi-level deep (confirmed via RadarrClient's whole dependency chain flowing into auto-discovered RadarrComingSoonChannel).
+It does not have confirmed support for collection injection (IEnumerable<T>/params T[] against a custom interface). Don't assume it works — design registries with named parameters (Registry(ProviderA a, ProviderB b)) instead, even though it's less "open/closed." Confirm collection injection explicitly before relying on it, then update the pattern once proven.
+IChannel / IScheduledTask / IService are auto-discovered via GetExports<T>() — the container constructs them, not your plugin code. You cannot hand a manually-built singleton into their constructors the way you can with your own IHasUIPages controllers (which are manually new'd in the plugin class). Any dependency an auto-discovered class needs must itself be container-resolvable.
+
+Channel/folder mechanics (if any future plugin touches IChannel)
+
+InternalChannelItemQuery.FolderId is exactly the ChannelItemInfo.Id you previously returned for that folder — round-trips verbatim.
+Folder items need both Type = ChannelItemType.Folder and FolderType (a separate enum) — Container for a plain generic folder; Series/Season/PhotoAlbum map to specialized BaseItem subclasses and get queued for real metadata scraping, Container never does.
+Recursive refresh depth is a real, configurable int (maxRefreshLevel, default 8) — Emby walks the tree calling GetChannelItems once per folder node. Reconciliation (add/remove) is scoped per-parent-folder, not global — a folder's own returned list only ever affects that folder's children.
+Server already caches IRequiresMediaInfoCallback.GetChannelItemMediaInfo results for 5 minutes — don't assume you need to build that caching yourself.
+
+Decompilation workflow (ILSpy)
+
+Ctrl+T = fuzzy type search across all loaded assemblies — the single most useful action once you know a symbol name.
+Right-click → Analyze = find every caller/usage of a member — this is how you trace "what actually calls my interface method and with what."
+When a class is referenced but you don't know which DLL it's in, load the likely candidates from Emby's system/ folder first (MediaBrowser.Controller.dll, MediaBrowser.Model.dll, the server implementation assembly) — Ctrl+T searches everything currently open at once.
+Decompiling the actual internal manager class (not just the public interface) is often what resolves the real open questions — the interface tells you the shape, the implementation tells you the behavior.

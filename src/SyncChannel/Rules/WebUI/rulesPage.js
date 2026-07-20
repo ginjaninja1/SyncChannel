@@ -49,6 +49,12 @@
         return !allowed || allowed.indexOf(operator) !== -1;
     }
 
+    function newId() {
+        return 'xxxxxxxxxxxx'.replace(/x/g, function () {
+            return (Math.random() * 16 | 0).toString(16);
+        });
+    }
+
     // ===================================================================
     // Pointer-based drag engine. Native HTML5 drag-and-drop is unreliable
     // inside Emby's webview (see the original ManageComingSoon project's
@@ -166,8 +172,6 @@
         if (matches.length === 0) return null;
         if (matches.length === 1) return matches[0];
 
-        // Pick the most deeply nested match — i.e. the one that does NOT
-        // itself contain any other match.
         for (var i = 0; i < matches.length; i++) {
             var isMostNested = true;
             for (var j = 0; j < matches.length; j++) {
@@ -196,9 +200,6 @@
             highlightedTarget = target;
         }
 
-        // Only container-type targets (children lists) get an insertion
-        // line — slots and badges are single-item drop points where a
-        // highlight alone is unambiguous.
         if (target && target.el.classList.contains('rcsGroupChildren')) {
             showInsertionIndicatorAt(target.el, e.clientY);
         } else {
@@ -277,7 +278,6 @@
         return chip;
     }
 
-    // Palette chips declared inline in HTML (Condition, Group, AND, OR, NOT)
     function wireStaticPaletteChips(view) {
         view.querySelectorAll('#rcsPalette .rcsChip[data-chip-kind]').forEach(function (chip) {
             var kind = chip.dataset.chipKind;
@@ -469,9 +469,6 @@
 
         rebuildValueWidget();
         refreshOperatorLock();
-        // Preserve any initial Value passed in (rebuildValueWidget above
-        // clears it, since on first build there's nothing to preserve
-        // from user interaction — restore it explicitly here for loads).
         if (data.Value) {
             var initialWidget = buildValueWidget(currentType(), data.Value, onChange);
             valueHolder.innerHTML = '';
@@ -615,7 +612,7 @@
             }
         }
 
-        return null; // append at end
+        return null;
     }
 
     // ===================================================================
@@ -677,12 +674,6 @@
         return invalid;
     }
 
-    // An empty group (no conditions/subgroups) is not "invalid" the way
-    // an incomplete condition is — it's syntactically fine — but under
-    // AND semantics it's vacuously TRUE (matches every movie), which is
-    // rarely what someone intends when a group is just mid-build. Flag it
-    // distinctly so it's visible without blocking Save the way a genuinely
-    // incomplete condition does.
     function findEmptyGroupElements(rootGroupEl) {
         var empty = [];
         rootGroupEl.querySelectorAll('.rcsGroup').forEach(function (groupEl) {
@@ -690,8 +681,6 @@
             var hasChildren = !!childrenContainer.querySelector(':scope > .rcsCondition, :scope > .rcsGroup');
             if (!hasChildren) empty.push(groupEl);
         });
-        // Root itself matches the .rcsGroup selector too since it carries
-        // both classes — include it (an empty root is the same trap).
         return empty;
     }
 
@@ -710,7 +699,7 @@
     }
 
     // ===================================================================
-    // Load / Save / Preview
+    // Preview
     // ===================================================================
     var autoPreviewTimer = null;
 
@@ -810,31 +799,90 @@
         });
     }
 
+    // ===================================================================
+    // Rule-set management (load/switch/create/duplicate/rename/delete/save)
+    //
+    // Fixes a real gap: this page used to edit exactly one implicit rule
+    // set and always saved it as a 1-item array, silently discarding any
+    // others. Now the full RadarrRuleSetsFile (RuleSets[] + ActiveRuleSetId)
+    // is loaded and held in memory — editing switches which entry the
+    // canvas is bound to, and Save persists the whole list, same
+    // load-everything/edit-in-memory/save-all shape already used by
+    // folderTreePage.js.
+    //
+    // Note: ActiveRuleSetId is still shared with the original flat Radarr
+    // channel (RadarrClient.GetComingSoonMoviesAsync reads it directly) —
+    // whichever rule set is selected here at Save time becomes "active" for
+    // that channel too. The new folder-tree fetches don't use
+    // ActiveRuleSetId at all (each fetch instance names its own RuleSetId
+    // explicitly), so this only matters if the old flat channel is still in
+    // use alongside the folder tree.
+    // ===================================================================
+    var currentFile = null;   // { RuleSets: [...], ActiveRuleSetId }
+    var currentIndex = -1;    // index into currentFile.RuleSets currently bound to the canvas
+
+    function emptyRoot() {
+        return { Kind: 'Group', LogicOperator: 'And', Not: false, Children: [] };
+    }
+
+    // Pulls whatever's currently in the DOM back into currentFile before
+    // switching rule sets or saving — otherwise in-progress edits to the
+    // rule set you're navigating away from would be silently lost.
+    function captureCurrentEditsIntoFile(view) {
+        if (currentIndex < 0) return;
+        var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
+        if (!rootGroupEl) return;
+        currentFile.RuleSets[currentIndex].Root = readGroupFromDom(rootGroupEl);
+    }
+
+    function renderRuleSetSelect(view) {
+        var select = view.querySelector('#rcsRuleSetSelect');
+        select.innerHTML = '';
+        currentFile.RuleSets.forEach(function (rs, idx) {
+            var opt = document.createElement('option');
+            opt.value = String(idx);
+            opt.innerText = rs.Name || '(unnamed)';
+            if (idx === currentIndex) opt.selected = true;
+            select.appendChild(opt);
+        });
+    }
+
+    function renderCanvasForCurrentIndex(view) {
+        var list = view.querySelector('#conditionsList');
+        list.innerHTML = '';
+        resetDragEngine();
+        populatePalette(view);
+        wireStaticPaletteChips(view);
+
+        var onChange = function () { scheduleAutoPreview(view); };
+        var ruleSet = currentFile.RuleSets[currentIndex];
+        list.appendChild(buildGroupNode(ruleSet.Root || emptyRoot(), true, onChange));
+
+        scheduleAutoPreview(view);
+    }
+
+    function switchToIndex(view, idx) {
+        captureCurrentEditsIntoFile(view);
+        currentIndex = idx;
+        renderRuleSetSelect(view);
+        renderCanvasForCurrentIndex(view);
+    }
+
     function loadRuleSets(view) {
         ApiClient.ajax({
             type: 'GET',
             url: ApiClient.getUrl('ChannelSync/RadarrRuleSets'),
             dataType: 'json'
         }).then(function (result) {
-            var active = null;
-            if (result && result.RuleSets && result.RuleSets.length) {
-                active = result.RuleSets.filter(function (r) {
-                    return r.Id === result.ActiveRuleSetId;
-                })[0] || result.RuleSets[0];
-            }
+            currentFile = (result && result.RuleSets && result.RuleSets.length)
+                ? result
+                : { RuleSets: [{ Id: newId(), Name: 'Default', Root: emptyRoot() }], ActiveRuleSetId: '' };
 
-            var list = view.querySelector('#conditionsList');
-            list.innerHTML = '';
+            var activeIdx = currentFile.RuleSets.findIndex(function (r) { return r.Id === currentFile.ActiveRuleSetId; });
+            currentIndex = activeIdx >= 0 ? activeIdx : 0;
 
-            var onChange = function () { scheduleAutoPreview(view); };
-
-            var rootGroup = (active && active.Root) ? active.Root : { LogicOperator: 'And', Children: [] };
-            list.appendChild(buildGroupNode(rootGroup, true, onChange));
-
-            view.currentRuleSetId = active ? active.Id : null;
-            view.currentRuleSetName = active ? active.Name : 'Default';
-
-            scheduleAutoPreview(view);
+            renderRuleSetSelect(view);
+            renderCanvasForCurrentIndex(view);
         });
     }
 
@@ -860,27 +908,64 @@
             if (!proceed) return;
         }
 
-        var root = readGroupFromDom(rootGroupEl);
-
-        var payload = {
-            RuleSets: [
-                {
-                    Id: view.currentRuleSetId || '',
-                    Name: view.currentRuleSetName || 'Default',
-                    Root: root
-                }
-            ],
-            ActiveRuleSetId: view.currentRuleSetId || ''
-        };
+        captureCurrentEditsIntoFile(view);
+        currentFile.ActiveRuleSetId = currentFile.RuleSets[currentIndex].Id;
 
         ApiClient.ajax({
             type: 'POST',
             url: ApiClient.getUrl('ChannelSync/RadarrRuleSets'),
-            data: JSON.stringify({ Payload: payload }),
+            data: JSON.stringify({ Payload: currentFile }),
             contentType: 'application/json',
             dataType: 'json'
         }).then(function () {
-            Dashboard.alert('Rule saved.');
+            Dashboard.alert('Saved ' + currentFile.RuleSets.length + ' rule set(s).');
+        });
+    }
+
+    function wireRuleSetToolbar(view) {
+        view.querySelector('#rcsRuleSetSelect').addEventListener('change', function (e) {
+            switchToIndex(view, parseInt(e.target.value, 10));
+        });
+
+        view.querySelector('#rcsNewRuleSet').addEventListener('click', function () {
+            captureCurrentEditsIntoFile(view);
+            var name = prompt('Name for the new rule set:', 'New Rule Set');
+            if (!name) return;
+            currentFile.RuleSets.push({ Id: newId(), Name: name.trim(), Root: emptyRoot() });
+            switchToIndex(view, currentFile.RuleSets.length - 1);
+        });
+
+        view.querySelector('#rcsDuplicateRuleSet').addEventListener('click', function () {
+            captureCurrentEditsIntoFile(view);
+            var source = currentFile.RuleSets[currentIndex];
+            var name = prompt('Name for the duplicated rule set:', source.Name + ' copy');
+            if (!name) return;
+            var clone = JSON.parse(JSON.stringify(source));
+            clone.Id = newId();
+            clone.Name = name.trim();
+            currentFile.RuleSets.push(clone);
+            switchToIndex(view, currentFile.RuleSets.length - 1);
+        });
+
+        view.querySelector('#rcsRenameRuleSet').addEventListener('click', function () {
+            var current = currentFile.RuleSets[currentIndex];
+            var name = prompt('Rename rule set:', current.Name);
+            if (!name) return;
+            current.Name = name.trim();
+            renderRuleSetSelect(view);
+        });
+
+        view.querySelector('#rcsDeleteRuleSet').addEventListener('click', function () {
+            if (currentFile.RuleSets.length <= 1) {
+                Dashboard.alert('At least one rule set must always exist — create another before deleting this one.');
+                return;
+            }
+            var current = currentFile.RuleSets[currentIndex];
+            if (!confirm('Delete rule set "' + current.Name + '"? Any folder-tree fetch still referencing it will fall back to the first available rule set on its next sync.')) {
+                return;
+            }
+            currentFile.RuleSets.splice(currentIndex, 1);
+            switchToIndex(view, 0);
         });
     }
 
@@ -896,7 +981,7 @@
             resolved = getComputedStyle(document.documentElement).backgroundColor;
         }
         if (!resolved || resolved === 'rgba(0, 0, 0, 0)' || resolved === 'transparent') {
-            resolved = '#202028'; // last-resort fallback if nothing paints a background at all
+            resolved = '#202028';
         }
 
         view.style.setProperty('--rcs-surface-bg', resolved);
@@ -904,11 +989,8 @@
 
     return function (view) {
         view.addEventListener('viewshow', function () {
-            resetDragEngine(); // clear any stale targets from a previous visit to this page
             applySurfaceBackgroundVariable(view);
-
-            populatePalette(view);
-            wireStaticPaletteChips(view);
+            wireRuleSetToolbar(view);
             loadRuleSets(view);
 
             view.querySelector('#btnSave').addEventListener('click', function () {
