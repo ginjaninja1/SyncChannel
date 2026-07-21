@@ -10,6 +10,7 @@
 		<Compile Remove="Channels\RadarrComingSoonChannel.cs" />
 		<Compile Remove="Configuration\ConfigurationPageView - Copy.cs" />
 		<Compile Remove="Models\RadarrChannelCache.cs" />
+		<Compile Remove="Models\RadarrMovie.cs" />
 		<Compile Remove="Rules\RadarrFieldAccessors.cs" />
 		<Compile Remove="ScheduledTasks\RadarrChannelSyncTask.cs" />
 		<Compile Remove="ScheduledTasks\RadarrDiagnosticsTask.cs" />
