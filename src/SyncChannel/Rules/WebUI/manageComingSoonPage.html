@@ -226,10 +226,12 @@
 				#connStatus { font-size: 0.85em; opacity: 0.7; margin-top: 1em; }
 			</style>
 
-			<div id="mcsTabs">
-				<button is="emby-button" type="button" class="mcsTabBtn" data-tab="ruleSets">Rule Sets</button>
-				<button is="emby-button" type="button" class="mcsTabBtn" data-tab="tree">Folder Tree</button>
-				<button is="emby-button" type="button" class="mcsTabBtn" data-tab="connections">Connections</button>
+			<div is="emby-tabs" data-index="0" class="tabs-viewmenubar emby-tabs padded-left padded-right focusable scrollX">
+				<div class="tabs-viewmenubar-slider emby-tabs-slider nohoverfocus scrollSliderX">
+					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button emby-tab-button-active" data-index="0" data-tab="ruleSets">Rule Sets</a>
+					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="1" data-tab="tree">Folder Tree</a>
+					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="2" data-tab="connections">Connections</a>
+				</div>
 			</div>
 
 			<!-- ================= Rule Sets tab ================= -->

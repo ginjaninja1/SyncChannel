@@ -1437,9 +1437,35 @@ keyWrap.appendChild(keyLenBadge);
                 renderConnectionAndSchemaSelects(view);
             });
 
+            var testBtn = document.createElement('span');
+            testBtn.className = 'ftIconBtn';
+            testBtn.style.cursor = 'pointer';
+            testBtn.innerText = '🔌 Test';
+            var testStatus = document.createElement('span');
+            testStatus.style.fontSize = '0.8em';
+            testStatus.style.opacity = '0.7';
+
+            testBtn.addEventListener('click', function () {
+                testStatus.innerText = 'Testing…';
+                var schemaId = schemas.length ? schemas[0].Id : '';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('ChannelSync/TestConnection'),
+                    data: JSON.stringify({ ConnectionId: c.Id, EndpointSchemaId: schemaId }),
+                    contentType: 'application/json',
+                    dataType: 'json'
+                }).then(function (result) {
+                    testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
+                }).catch(function () {
+                    testStatus.innerText = '❌ Test request failed.';
+                });
+            });
+
             row.appendChild(labelInput);
             row.appendChild(urlInput);
             row.appendChild(keyWrap);
+            row.appendChild(testBtn);
+            row.appendChild(testStatus);
             row.appendChild(removeBtn);
             list.appendChild(row);
         });
@@ -1467,19 +1493,19 @@ keyWrap.appendChild(keyLenBadge);
     // Tabs
     // ===================================================================
     function wireTabs(view) {
-        var buttons = view.querySelectorAll('.mcsTabBtn');
+        var buttons = view.querySelectorAll('.emby-tab-button');
         buttons.forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                buttons.forEach(function (b) { b.classList.remove('mcsTabActive'); });
-                btn.classList.add('mcsTabActive');
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                buttons.forEach(function (b) { b.classList.remove('emby-tab-button-active'); });
+                btn.classList.add('emby-tab-button-active');
 
                 view.querySelectorAll('.mcsTab').forEach(function (t) { t.classList.remove('mcsTabVisible'); });
                 view.querySelector('#tab-' + btn.dataset.tab).classList.add('mcsTabVisible');
             });
         });
 
-        // Default to the first tab.
-        buttons[0].classList.add('mcsTabActive');
+        buttons[0].classList.add('emby-tab-button-active');
         view.querySelector('#tab-' + buttons[0].dataset.tab).classList.add('mcsTabVisible');
     }
 

@@ -187,5 +187,32 @@ namespace SyncChannel.Fetching
 
             return null;
         }
+
+        public async Task<(bool Success, string Message)> TestReachabilityAsync(
+            ConnectionEntry connection, EndpointSchema schema, CancellationToken cancellationToken)
+        {
+            var baseUrl = connection.BaseUrl.TrimEnd('/') + schema.Path;
+            var url = baseUrl + "?apikey=" + Uri.EscapeDataString(connection.ApiKey);
+
+            var options = new HttpRequestOptions
+            {
+                Url = url,
+                CancellationToken = cancellationToken,
+                TimeoutMs = 4000
+            };
+            options.RequestHeaders["X-Api-Key"] = connection.ApiKey;
+
+            try
+            {
+                using (var response = await httpClient.GetResponse(options).ConfigureAwait(false))
+                {
+                    return (true, "Reachable.");
+                }
+            }
+            catch (Exception ex)
+            {
+                return (false, ex.Message);
+            }
+        }
     }
 }

@@ -1,15 +1,17 @@
 ﻿namespace SyncChannel.Rules
 {
+    using MediaBrowser.Model.Logging;
+    using MediaBrowser.Model.Services;
     using SyncChannel.Configuration;
     using SyncChannel.Fetching;
     using SyncChannel.ScheduledTasks;
     using SyncChannel.Services;
-    using MediaBrowser.Model.Logging;
-    using MediaBrowser.Model.Services;
     using System.Collections.Generic;
     using System.Linq;
     using System.Text.Json;
     using System.Threading;
+    using System;
+    using System.Threading.Tasks;
 
     // ---- Connections ----
     [Route("/ChannelSync/Connections", "GET")] public class GetConnections : IReturn<ConnectionsFile> { }
@@ -33,9 +35,17 @@
     }
 
     // ---- Folder tree ----
+    // ---- Folder tree ----
     [Route("/ChannelSync/FolderTree", "GET")] public class GetFolderTree : IReturn<FolderTreeFile> { }
     [Route("/ChannelSync/FolderTree", "POST")] public class SaveFolderTree : IReturn<object> { public FolderNode RootFolder { get; set; } }
 
+    // ---- Connection reachability test ----
+    [Route("/ChannelSync/TestConnection", "POST")]
+    public class TestConnection : IReturn<object>
+    {
+        public string ConnectionId { get; set; }
+        public string EndpointSchemaId { get; set; }
+    }
     public class ChannelSyncApiSurface : IService
     {
         private readonly ConnectionsStore connectionsStore;
@@ -68,7 +78,49 @@
         }
 
         public object Get(GetConnections r) => connectionsStore.Load();
-        public object Post(SaveConnections r) { connectionsStore.Save(r.Payload); return new { Success = true }; }
+
+        public object Post(SaveConnections r)
+        {
+            var before = connectionsStore.Load().Connections.ToDictionary(c => c.Id, c => c);
+            connectionsStore.Save(r.Payload);
+
+            var changedIds = r.Payload.Connections
+                .Where(c => !before.TryGetValue(c.Id, out var prior) ||
+                            prior.BaseUrl != c.BaseUrl || prior.ApiKey != c.ApiKey)
+                .Select(c => c.Id)
+                .ToList();
+
+            if (changedIds.Count > 0)
+            {
+                var tree = treeStore.Load();
+                var affectedFolders = changedIds
+                    .SelectMany(id => FindFoldersUsingConnection(tree.RootFolder, id))
+                    .Distinct()
+                    .ToList();
+
+                if (affectedFolders.Count > 0)
+                {
+                    _ = syncTask.SyncFoldersAndRefresh(affectedFolders, CancellationToken.None);
+                }
+            }
+
+            return new { Success = true };
+        }
+
+        private static List<string> FindFoldersUsingConnection(FolderNode node, string connectionId)
+        {
+            var result = new List<string>();
+            void Walk(FolderNode n)
+            {
+                if (n.Fetches.Any(f => string.Equals(f.ConnectionId, connectionId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    result.Add(n.Id);
+                }
+                foreach (var c in n.Children) Walk(c);
+            }
+            Walk(node);
+            return result;
+        }
 
         public object Get(GetEndpointSchemas r) => schemaStore.Load();
         public object Post(SaveEndpointSchemas r)
@@ -126,7 +178,25 @@
         {
             r.RootFolder.IsRoot = true;
             treeStore.Save(new FolderTreeFile { RootFolder = r.RootFolder });
+
+            _ = syncTask.Execute(CancellationToken.None, new Progress<double>());
+
             return new { Success = true };
+        }
+
+        public async Task<object> Post(TestConnection r)
+        {
+            var connections = connectionsStore.Load();
+            var connection = connections.Connections.FirstOrDefault(c => c.Id == r.ConnectionId);
+            var schema = schemaStore.Find(r.EndpointSchemaId);
+
+            if (connection == null || schema == null)
+            {
+                return new { Success = false, Message = "Connection or endpoint not found." };
+            }
+
+            var (ok, message) = await fetchProvider.TestReachabilityAsync(connection, schema, CancellationToken.None);
+            return new { Success = ok, Message = message };
         }
 
         public object Post(PreviewRule request)
