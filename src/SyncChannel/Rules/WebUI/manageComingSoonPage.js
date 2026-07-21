@@ -1356,8 +1356,13 @@
             data: JSON.stringify({ RootFolder: currentTree.RootFolder }),
             contentType: 'application/json',
             dataType: 'json'
-        }).then(function () {
-            statusEl.innerText = 'Saved. New folders/fetches populate on the next sync, or run "Sync Coming Soon Folder Tree" from Scheduled Tasks now.';
+        }).then(function (result) {
+            if (result.Warnings && result.Warnings.length > 0) {
+                statusEl.innerHTML = 'Saved, syncing now — but ' + result.Warnings.length + ' fetch(es) will be skipped:<br>' +
+                    result.Warnings.map(function (w) { return '⚠ ' + w; }).join('<br>');
+            } else {
+                statusEl.innerText = 'Saved. Syncing now…';
+            }
         }).catch(function () {
             statusEl.innerText = 'Save failed — see server log.';
         });
@@ -1482,7 +1487,7 @@ keyWrap.appendChild(keyLenBadge);
             contentType: 'application/json',
             dataType: 'json'
         }).then(function () {
-            statusEl.innerText = 'Saved.';
+            statusEl.innerText = 'Saved. Any folders using a changed connection are being re-synced now.';
             renderConnectionAndSchemaSelects(view);
         }).catch(function () {
             statusEl.innerText = 'Save failed — see server log.';

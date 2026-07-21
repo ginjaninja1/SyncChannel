@@ -179,9 +179,54 @@
             r.RootFolder.IsRoot = true;
             treeStore.Save(new FolderTreeFile { RootFolder = r.RootFolder });
 
+            var warnings = ValidateFetchReferences(r.RootFolder);
+
             _ = syncTask.Execute(CancellationToken.None, new Progress<double>());
 
-            return new { Success = true };
+            return new { Success = true, Warnings = warnings };
+        }
+
+        /// <summary>
+        /// Checks every fetch in the tree against what's currently on disk for
+        /// connections/schemas/rule sets. Purely informational — does not block
+        /// the save or the resync, since a fetch referencing something missing
+        /// is already handled gracefully (skipped, logged) by FolderTreeSyncTask.
+        /// This just surfaces that same condition to the UI immediately instead
+        /// of leaving it to only show up in the server log.
+        /// </summary>
+        private List<string> ValidateFetchReferences(FolderNode root)
+        {
+            var connectionIds = new HashSet<string>(
+                connectionsStore.Load().Connections.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+            var schemaIds = new HashSet<string>(
+                schemaStore.Load().Schemas.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+            var ruleSetIds = new HashSet<string>(
+                ruleSetStore.Load().RuleSets.Select(rs => rs.Id), StringComparer.OrdinalIgnoreCase);
+
+            var warnings = new List<string>();
+
+            void Walk(FolderNode node)
+            {
+                foreach (var fetch in node.Fetches)
+                {
+                    var missing = new List<string>();
+                    if (!connectionIds.Contains(fetch.ConnectionId)) missing.Add("connection");
+                    if (!schemaIds.Contains(fetch.EndpointSchemaId)) missing.Add("endpoint");
+                    if (!ruleSetIds.Contains(fetch.RuleSetId)) missing.Add("rule set");
+
+                    if (missing.Count > 0)
+                    {
+                        warnings.Add(string.Format(
+                            "Folder '{0}', fetch '{1}': missing {2} — this fetch will be skipped until fixed.",
+                            node.DisplayName, fetch.DisplayLabel, string.Join(" + ", missing)));
+                    }
+                }
+
+                foreach (var child in node.Children) Walk(child);
+            }
+
+            Walk(root);
+            return warnings;
         }
 
         public async Task<object> Post(TestConnection r)

@@ -19,6 +19,10 @@
 	<ItemGroup>
 		<None Remove="ComingSoonChannel.png" />
 		<None Remove="ComingSoonChannel2.png" />
+		<None Remove="Rules\WebUI\folderTreePage.html" />
+		<None Remove="Rules\WebUI\folderTreePage.js" />
+		<None Remove="Rules\WebUI\rulesPage.html" />
+		<None Remove="Rules\WebUI\rulesPage.js" />
 		<None Remove="thumb.png" />
 		<None Remove="comingsoon.mp4" />
 		<None Remove="Rules\WebUI\manageComingSoonPage.html" />

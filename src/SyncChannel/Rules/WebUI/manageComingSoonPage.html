@@ -307,7 +307,7 @@
 			<!-- ================= Folder Tree tab ================= -->
 			<div id="tab-tree" class="mcsTab">
 				<div class="fieldDescription" style="margin-bottom: 1em;">
-					Build the folder structure users browse in the Sync Channel. Each folder (including the root) can have one or more fetches — each fetch names a Connection, an Endpoint, and a Rule set. Saving the folder tree does not immediately re-query anything; new folders/fetches populate on the next scheduled sync, or run "Sync Coming Soon Folder Tree" from Scheduled Tasks now. Saving a changed rule set (on the other tab) does trigger an immediate, targeted re-sync of just the folders that use it.
+					Build the folder structure users browse in the Sync Channel. Each folder (including the root) can have one or more fetches — each fetch names a Connection, an Endpoint, and a Rule set. Saving the folder tree, a connection, or a rule set all trigger an immediate re-sync of whatever's affected — no need to run "Sync Coming Soon Folder Tree" from Scheduled Tasks manually.
 				</div>
 
 				<div id="ftRoot"></div>
