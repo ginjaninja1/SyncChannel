@@ -29,10 +29,11 @@ namespace SyncChannel.Configuration
         {
             new GenericListItem
             {
-                PrimaryText = "Manage Coming Soon",
+                PrimaryText = "Manage Sync Channel",
                 SecondaryText = "Connections, rule sets, and the folder tree",
                 Icon = IconNames.folder_special,
-                Status = ItemStatus.None,
+                IconMode = ItemListIconMode.LargeInCircle,
+                Status = ItemStatus.Succeeded,
                 HyperLink = "configurationpage?name=ManageComingSoonPage",
                 HyperLinkTargetExternal = false
             }
