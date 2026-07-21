@@ -33,16 +33,17 @@ namespace SyncChannel.ScheduledTasks
         private readonly ChannelIdentityReconciler reconciler;
 
         public FolderTreeSyncTask(
-            FolderTreeStore treeStore,
-            FolderCacheStore cacheStore,
-            ConnectionsStore connectionsStore,
-            EndpointSchemaStore schemaStore,
-            RuleSetStore ruleSetStore,
-            HttpFetchProvider fetchProvider,
-            Services.LastResponseCacheStore lastResponseStore,
-            IChannelManager channelManager,
-            ITaskManager taskManager,
-            ILogger logger)
+    FolderTreeStore treeStore,
+    FolderCacheStore cacheStore,
+    ConnectionsStore connectionsStore,
+    EndpointSchemaStore schemaStore,
+    RuleSetStore ruleSetStore,
+    HttpFetchProvider fetchProvider,
+    Services.LastResponseCacheStore lastResponseStore,
+    IChannelManager channelManager,
+    ITaskManager taskManager,
+    ChannelIdentityReconciler reconciler,   // <-- was missing
+    ILogger logger)
         {
             this.treeStore = treeStore;
             this.cacheStore = cacheStore;
@@ -53,8 +54,8 @@ namespace SyncChannel.ScheduledTasks
             this.lastResponseStore = lastResponseStore;
             this.channelManager = channelManager;
             this.taskManager = taskManager;
+            this.reconciler = reconciler;           // now actually assigned
             this.logger = logger;
-            this.reconciler = reconciler;
         }
 
         public string Name => "Sync Coming Soon Folder Tree";

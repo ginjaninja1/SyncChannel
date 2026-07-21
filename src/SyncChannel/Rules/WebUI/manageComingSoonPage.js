@@ -1386,12 +1386,44 @@
             urlInput.placeholder = 'http://127.0.0.1:7878';
             urlInput.addEventListener('input', function (e) { c.BaseUrl = e.target.value; });
 
-            var keyInput = document.createElement('input');
-            keyInput.type = 'password';
-            keyInput.style.width = '12em';
-            keyInput.value = c.ApiKey;
-            keyInput.placeholder = 'API key';
-            keyInput.addEventListener('input', function (e) { c.ApiKey = e.target.value; });
+            var keyWrap = document.createElement('span');
+keyWrap.style.display = 'inline-flex';
+keyWrap.style.alignItems = 'center';
+keyWrap.style.gap = '0.3em';
+
+var keyInput = document.createElement('input');
+keyInput.type = 'password';
+keyInput.style.width = '12em';
+keyInput.value = c.ApiKey;
+keyInput.placeholder = 'API key';
+
+var keyLenBadge = document.createElement('span');
+keyLenBadge.style.fontSize = '0.75em';
+keyLenBadge.style.opacity = '0.6';
+keyLenBadge.style.minWidth = '3em';
+
+function refreshKeyLen() {
+    keyLenBadge.innerText = '[' + c.ApiKey.length + ' chars]';
+}
+refreshKeyLen();
+
+keyInput.addEventListener('input', function (e) {
+    c.ApiKey = e.target.value;
+    refreshKeyLen();
+});
+
+var toggleBtn = document.createElement('span');
+toggleBtn.className = 'ftIconBtn';
+toggleBtn.style.cursor = 'pointer';
+toggleBtn.title = 'Show/hide API key';
+toggleBtn.innerText = '👁';
+toggleBtn.addEventListener('click', function () {
+    keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
+});
+
+keyWrap.appendChild(keyInput);
+keyWrap.appendChild(toggleBtn);
+keyWrap.appendChild(keyLenBadge);
 
             var removeBtn = document.createElement('span');
             removeBtn.className = 'ftIconBtn';
@@ -1407,7 +1439,7 @@
 
             row.appendChild(labelInput);
             row.appendChild(urlInput);
-            row.appendChild(keyInput);
+            row.appendChild(keyWrap);
             row.appendChild(removeBtn);
             list.appendChild(row);
         });
