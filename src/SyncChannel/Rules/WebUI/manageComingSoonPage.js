@@ -27,6 +27,19 @@
         });
     }
 
+    function connectionBadgeGlyph(c) {
+        if (c.LastTestSucceeded === true) return '✅';
+        if (c.LastTestSucceeded === false) return '❌';
+        return '⚪';
+    }
+
+    function connectionBadgeText(c) {
+        var glyph = connectionBadgeGlyph(c);
+        if (!c.LastTestedUtc) return glyph + ' untested';
+        var when = new Date(c.LastTestedUtc);
+        return glyph + ' ' + (c.LastTestSucceeded ? 'reachable' : 'unreachable') + ' (' + when.toLocaleString() + ')';
+    }
+
     // ===================================================================
     // Pointer-based drag engine (unchanged mechanics from the original
     // rulesPage.js / folderTreePage.js — native HTML5 DnD is unreliable in
@@ -219,18 +232,12 @@
     // Rule-set state (module-scoped so the Rule Sets tab, the palette, and
     // the folder tree's Add-Fetch dropdown can all read the same lists).
     // ===================================================================
-    var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey, SystemType }]
+    var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey, SystemType, LastTestSucceeded, LastTestedUtc }]
     var schemas = [];               // [{ Id, DisplayName, SystemType, Fields: [{Key/JsonPath, DisplayName, Type}] }]
     var ruleSetsFile = null;        // { RuleSets: [{ Id, Name, EndpointSchemaId, Root }] }
     var currentRuleSetIndex = -1;   // index into ruleSetsFile.RuleSets bound to the canvas
 
     // ---- SystemType filtering helpers ----
-    // A connection points at exactly one product (Radarr, Sonarr, etc.) via
-    // its SystemType. An EndpointSchema declares the same SystemType it
-    // requires. These two helpers are the single place that relationship is
-    // enforced client-side; every dropdown that lists schemas alongside a
-    // chosen connection (or vice versa) should filter through these rather
-    // than listing everything.
     function schemasForSystemType(systemType) {
         if (!systemType) return schemas;
         return schemas.filter(function (s) { return s.SystemType === systemType; });
@@ -239,6 +246,10 @@
     function connectionSystemType(connectionId) {
         var c = connections.filter(function (x) { return x.Id === connectionId; })[0];
         return c ? c.SystemType : '';
+    }
+
+    function findConnection(connectionId) {
+        return connections.filter(function (x) { return x.Id === connectionId; })[0];
     }
 
     function schemaFields(schemaId) {
@@ -283,9 +294,6 @@
         chip.appendChild(tag);
 
         makeDraggableSource(chip, 'field', function () {
-            // Encodes both path and type into the dragged value so the
-            // condition's drop handler can set operator-locking correctly
-            // without re-looking-up the schema.
             return JSON.stringify({ path: fieldPath, type: type, display: displayName || fieldPath });
         });
         return chip;
@@ -702,7 +710,7 @@
     }
 
     // ===================================================================
-    // Preview
+    // Preview — cache-first, self-sufficient (no folder-tree sync needed).
     // ===================================================================
     var autoPreviewTimer = null;
 
@@ -782,10 +790,11 @@
         if (emptyGroups.length > 0) {
             warningText = ' ⚠ ' + emptyGroups.length + ' empty group(s) outlined in amber — an empty AND-group matches EVERY item by default, which may widen this rule further than intended.';
         }
-        statusEl.innerText = 'Live preview:' + warningText;
 
         var connectionId = view.querySelector('#rcsConnectionSelect').value;
         var schemaId = view.querySelector('#rcsSchemaSelect').value;
+
+        statusEl.innerText = 'Checking…' + warningText;
 
         ApiClient.ajax({
             type: 'POST',
@@ -794,6 +803,12 @@
             contentType: 'application/json',
             dataType: 'json'
         }).then(function (result) {
+            if (result.Status === 'unavailable' || result.Status === 'error') {
+                statusEl.innerText = result.Message + warningText;
+                resultEl.innerHTML = '';
+                return;
+            }
+
             var shown = (result.Matches || []).length;
             var countText = shown < result.MatchCount
                 ? result.MatchCount + ' match(es) — showing first ' + shown + ':'
@@ -802,7 +817,7 @@
 
             renderPreviewTable(resultEl, result.Fields || [], result.Matches || []);
         }).catch(function () {
-            statusEl.innerText = 'Preview unavailable — no cached response yet for this connection/endpoint. Run a sync once, then preview will work.' + warningText;
+            statusEl.innerText = 'Preview request failed — see server log.' + warningText;
             resultEl.innerHTML = '';
         });
     }
@@ -824,7 +839,7 @@
     function captureCurrentEditsIntoFile(view) {
         if (currentRuleSetIndex < 0) return;
         var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
-        if (!current) return; // index no longer valid (e.g. array was just spliced by a delete) — nothing to capture
+        if (!current) return;
         var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
         if (!rootGroupEl) return;
         current.Root = readGroupFromDom(rootGroupEl);
@@ -889,10 +904,6 @@
         renderCanvasForCurrentIndex(view);
     }
 
-    // Rebuilds the #rcsSchemaSelect option list to only schemas matching the
-    // currently selected connection's SystemType, then cascades into the
-    // rule-set selector via onSchemaChanged. Called on initial load and
-    // whenever the connection dropdown changes.
     function rebuildRuleSetsSchemaOptions(view) {
         var connSel = view.querySelector('#rcsConnectionSelect');
         var schemaSel = view.querySelector('#rcsSchemaSelect');
@@ -915,7 +926,7 @@
         connections.forEach(function (c) {
             var o = document.createElement('option');
             o.value = c.Id;
-            o.innerText = c.DisplayLabel || '(unnamed connection)';
+            o.innerText = connectionBadgeGlyph(c) + ' ' + (c.DisplayLabel || '(unnamed connection)');
             connSel.appendChild(o);
         });
 
@@ -1024,7 +1035,7 @@
                 Dashboard.alert('No rule set selected to delete.');
                 return;
             }
-            if (!confirm('Delete rule set "' + current.Name + '"? Any folder-tree fetch still referencing it will fall back to the first available rule set for that endpoint on its next sync.')) {
+            if (!confirm('Delete rule set "' + current.Name + '"? Any folder-tree fetch still referencing it will be blocked from saving until reassigned.')) {
                 return;
             }
             ruleSetsFile.RuleSets.splice(currentRuleSetIndex, 1);
@@ -1039,7 +1050,7 @@
     var currentTree = null;
 
     function connectionLabel(id) {
-        var c = connections.filter(function (x) { return x.Id === id; })[0];
+        var c = findConnection(id);
         return c ? c.DisplayLabel : '(unknown connection)';
     }
 
@@ -1058,11 +1069,6 @@
         openFetchFieldForm(container, folderNode, null, onChange);
     }
 
-    // Add/Edit-fetch form: three dropdowns (Connection / Endpoint / Rule
-    // set) instead of the old provider-picker + generated settings form.
-    // Endpoint options are filtered to the selected Connection's SystemType,
-    // and Rule set options are filtered to the selected Endpoint — same
-    // structural guard as the Rule Sets tab, cascaded one level further.
     function openFetchFieldForm(container, folderNode, existingFetch, onChange) {
         container.innerHTML = '';
 
@@ -1107,7 +1113,7 @@
 
         var connSelect = makeSelectField(
             'Connection',
-            connections.map(function (c) { return { value: c.Id, text: c.DisplayLabel }; }),
+            connections.map(function (c) { return { value: c.Id, text: connectionBadgeGlyph(c) + ' ' + c.DisplayLabel }; }),
             existingFetch ? existingFetch.ConnectionId : (connections[0] && connections[0].Id));
 
         var schemaSelect = makeSelectField(
@@ -1155,10 +1161,6 @@
             wrap.classList.add('ftRuleSetFieldWrap');
         }
 
-        // Rebuilds the Endpoint dropdown to only schemas matching the
-        // currently selected Connection's SystemType, preserving the current
-        // selection if it's still valid, then cascades into the rule-set
-        // rebuild since the endpoint may have changed underneath it.
         function rebuildSchemaOptions() {
             var allowed = schemasForSystemType(connectionSystemType(connSelect.value));
             var currentVal = schemaSelect.value;
@@ -1228,6 +1230,18 @@
         container.appendChild(panel);
     }
 
+    // References missing entirely (deleted after the fact) — hard-fail
+    // check, client-side mirror of the server's ValidateFetchReferences,
+    // used to show a live "⚠ missing" badge on each fetch row without
+    // waiting for a save round-trip.
+    function fetchMissingReferences(fetch) {
+        var problems = [];
+        if (!findConnection(fetch.ConnectionId)) problems.push('connection');
+        if (!schemas.some(function (s) { return s.Id === fetch.EndpointSchemaId; })) problems.push('endpoint');
+        if (!ruleSetsFile.RuleSets.some(function (rs) { return rs.Id === fetch.RuleSetId; })) problems.push('rule set');
+        return problems;
+    }
+
     function buildFetchRow(fetch, folderNode, onChange) {
         var row = document.createElement('div');
         row.className = 'ftFetch' + (fetch.Enabled ? '' : ' ftFetchDisabled');
@@ -1236,6 +1250,16 @@
         badge.className = 'ftFetchProviderBadge';
         badge.innerText = schemaLabel(fetch.EndpointSchemaId);
         row.appendChild(badge);
+
+        var missing = fetchMissingReferences(fetch);
+        if (missing.length > 0) {
+            row.classList.add('ftFetchInvalid');
+            var warnBadge = document.createElement('span');
+            warnBadge.className = 'ftFetchWarnBadge';
+            warnBadge.title = 'Missing: ' + missing.join(', ') + ' — this fetch cannot be saved until fixed.';
+            warnBadge.innerText = '⚠';
+            row.appendChild(warnBadge);
+        }
 
         var label = document.createElement('span');
         label.className = 'ftFetchLabel';
@@ -1285,6 +1309,7 @@
         row.appendChild(actions);
 
         var wrapper = document.createElement('div');
+        wrapper.dataset.fetchId = fetch.Id;
         wrapper.appendChild(row);
         wrapper.appendChild(editPanel);
         return wrapper;
@@ -1418,6 +1443,8 @@
         var statusEl = view.querySelector('#ftStatus');
         statusEl.innerText = 'Saving…';
 
+        view.querySelectorAll('.ftFetch').forEach(function (el) { el.classList.remove('ftFetchInvalid'); });
+
         ApiClient.ajax({
             type: 'POST',
             url: ApiClient.getUrl('ChannelSync/FolderTree'),
@@ -1425,12 +1452,24 @@
             contentType: 'application/json',
             dataType: 'json'
         }).then(function (result) {
-            if (result.Warnings && result.Warnings.length > 0) {
-                statusEl.innerHTML = 'Saved, syncing now — but ' + result.Warnings.length + ' fetch(es) will be skipped:<br>' +
-                    result.Warnings.map(function (w) { return '⚠ ' + w; }).join('<br>');
-            } else {
-                statusEl.innerText = 'Saved. Syncing now…';
+            if (!result.Success) {
+                statusEl.innerHTML = 'Not saved — ' + result.Errors.length + ' fetch(es) reference something that no longer exists:<br>' +
+                    result.Errors.map(function (e) { return '⚠ ' + e.Message; }).join('<br>');
+
+                result.Errors.forEach(function (e) {
+                    var wrapper = view.querySelector('[data-fetch-id="' + e.FetchId + '"]');
+                    if (wrapper) {
+                        var row = wrapper.querySelector('.ftFetch');
+                        if (row) row.classList.add('ftFetchInvalid');
+                    }
+                });
+
+                var firstBad = view.querySelector('.ftFetchInvalid');
+                if (firstBad) firstBad.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                return;
             }
+
+            statusEl.innerText = 'Saved. Syncing now…';
         }).catch(function () {
             statusEl.innerText = 'Save failed — see server log.';
         });
@@ -1461,10 +1500,6 @@
             urlInput.placeholder = 'http://127.0.0.1:7878';
             urlInput.addEventListener('input', function (e) { c.BaseUrl = e.target.value; });
 
-            // System-type picker — which product (Radarr/Sonarr/etc.) this
-            // connection actually points at. Drives which EndpointSchemas
-            // this connection is offered alongside elsewhere in the UI, and
-            // which schema Test Connection uses.
             var typeSelect = document.createElement('select');
             KNOWN_SYSTEM_TYPES.forEach(function (t) {
                 var o = document.createElement('option');
@@ -1474,8 +1509,6 @@
                 typeSelect.appendChild(o);
             });
             if (!c.SystemType) {
-                // Default to the first entry so a never-set connection isn't
-                // silently blank — but don't overwrite an existing value.
                 c.SystemType = KNOWN_SYSTEM_TYPES[0];
                 typeSelect.value = c.SystemType;
             }
@@ -1520,13 +1553,17 @@
             keyWrap.appendChild(toggleBtn);
             keyWrap.appendChild(keyLenBadge);
 
+            var connBadge = document.createElement('span');
+            connBadge.className = 'connBadge';
+            connBadge.innerText = connectionBadgeText(c);
+
             var removeBtn = document.createElement('span');
             removeBtn.className = 'ftIconBtn';
             removeBtn.style.cursor = 'pointer';
             removeBtn.innerText = '✕';
             removeBtn.title = 'Remove connection';
             removeBtn.addEventListener('click', function () {
-                if (!confirm('Remove connection "' + c.DisplayLabel + '"? Any fetch referencing it will fail until reassigned.')) return;
+                if (!confirm('Remove connection "' + c.DisplayLabel + '"? Any fetch referencing it will be blocked from saving until reassigned.')) return;
                 connections.splice(idx, 1);
                 renderConnectionsTab(view);
                 renderConnectionAndSchemaSelects(view);
@@ -1540,29 +1577,41 @@
             testStatus.style.fontSize = '0.8em';
             testStatus.style.opacity = '0.7';
 
+            // Tests the LIVE field values on screen — works before Save as
+            // well as after, and persists LastTestSucceeded/LastTestedUtc
+            // onto the connection if it already exists on disk.
             testBtn.addEventListener('click', function () {
-    testStatus.innerText = 'Testing…';
+                testStatus.innerText = 'Testing…';
 
-    var matching = schemasForSystemType(c.SystemType);
-    var schemaId = matching.length ? matching[0].Id : (schemas.length ? schemas[0].Id : '');
+                var matching = schemasForSystemType(c.SystemType);
+                var schemaId = matching.length ? matching[0].Id : (schemas.length ? schemas[0].Id : '');
 
-    if (!schemaId) {
-        testStatus.innerText = '❌ No endpoint schema available for system type "' + c.SystemType + '".';
-        return;
-    }
+                if (!schemaId) {
+                    testStatus.innerText = '❌ No endpoint schema available for system type "' + c.SystemType + '".';
+                    return;
+                }
 
-    ApiClient.ajax({
-        type: 'POST',
-        url: ApiClient.getUrl('ChannelSync/TestConnection'),
-        data: JSON.stringify({ BaseUrl: c.BaseUrl, ApiKey: c.ApiKey, SystemType: c.SystemType, EndpointSchemaId: schemaId }),
-        contentType: 'application/json',
-        dataType: 'json'
-    }).then(function (result) {
-        testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
-    }).catch(function () {
-        testStatus.innerText = '❌ Test request failed.';
-    });
-});
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('ChannelSync/TestConnection'),
+                    data: JSON.stringify({
+                        ConnectionId: c.Id,
+                        BaseUrl: c.BaseUrl,
+                        ApiKey: c.ApiKey,
+                        SystemType: c.SystemType,
+                        EndpointSchemaId: schemaId
+                    }),
+                    contentType: 'application/json',
+                    dataType: 'json'
+                }).then(function (result) {
+                    testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
+                    c.LastTestSucceeded = result.Success;
+                    c.LastTestedUtc = new Date().toISOString();
+                    connBadge.innerText = connectionBadgeText(c);
+                }).catch(function () {
+                    testStatus.innerText = '❌ Test request failed.';
+                });
+            });
 
             row.appendChild(labelInput);
             row.appendChild(urlInput);
@@ -1570,6 +1619,7 @@
             row.appendChild(keyWrap);
             row.appendChild(testBtn);
             row.appendChild(testStatus);
+            row.appendChild(connBadge);
             row.appendChild(removeBtn);
             list.appendChild(row);
         });
@@ -1642,10 +1692,6 @@
         });
     }
 
-    // Emby's theme exposes accent color as HSL components but no discrete
-    // "surface background" variable — resolved directly off the page at
-    // runtime and exposed as our own CSS variable, same approach as the
-    // original rulesPage.js.
     function applySurfaceBackgroundVariable(view) {
         var resolved = getComputedStyle(document.body).backgroundColor;
 
@@ -1670,7 +1716,7 @@
             view.querySelector('#ftSaveBtn').addEventListener('click', function () { saveFolderTree(view); });
 
             view.querySelector('#connAddBtn').addEventListener('click', function () {
-                connections.push({ Id: newId(), DisplayLabel: 'New Connection', BaseUrl: '', ApiKey: '', SystemType: KNOWN_SYSTEM_TYPES[0] });
+                connections.push({ Id: newId(), DisplayLabel: 'New Connection', BaseUrl: '', ApiKey: '', SystemType: KNOWN_SYSTEM_TYPES[0], LastTestSucceeded: null, LastTestedUtc: null });
                 renderConnectionsTab(view);
             });
             view.querySelector('#connSaveBtn').addEventListener('click', function () { saveConnections(view); });

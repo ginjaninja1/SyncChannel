@@ -25,7 +25,11 @@
     [Route("/ChannelSync/RuleSets", "GET")] public class GetRuleSets : IReturn<RuleSetsFile> { }
     [Route("/ChannelSync/RuleSets", "POST")] public class SaveRuleSets : IReturn<object> { public RuleSetsFile Payload { get; set; } }
 
-    // ---- Live preview (against last-cached response for a connection+schema) ----
+    // ---- Live preview (cache-first: fetches live only if nothing cached
+    // yet for this connection+schema pair, otherwise always reuses the
+    // cached response — representative data is enough for rule-building,
+    // and this keeps API/PC load minimal). Fully self-sufficient: does not
+    // require a folder-tree sync to have ever run. ----
     [Route("/ChannelSync/RulePreview", "POST")]
     public class PreviewRule : IReturn<object>
     {
@@ -38,15 +42,29 @@
     [Route("/ChannelSync/FolderTree", "GET")] public class GetFolderTree : IReturn<FolderTreeFile> { }
     [Route("/ChannelSync/FolderTree", "POST")] public class SaveFolderTree : IReturn<object> { public FolderNode RootFolder { get; set; } }
 
-    // ---- Connection reachability test ----
+    // ---- Connection reachability test. Tests the LIVE field values sent
+    // from the browser, not whatever's on disk — so it works before Save
+    // as well as after. ConnectionId is included only so that, if this
+    // connection also exists on disk, its persisted LastTestSucceeded/
+    // LastTestedUtc badge gets updated too. ----
     [Route("/ChannelSync/TestConnection", "POST")]
     public class TestConnection : IReturn<object>
     {
+        public string ConnectionId { get; set; }
         public string BaseUrl { get; set; }
         public string ApiKey { get; set; }
         public string SystemType { get; set; }
         public string EndpointSchemaId { get; set; }
     }
+
+    public class FetchValidationError
+    {
+        public string FolderId { get; set; }
+        public string FetchId { get; set; }
+        public string Field { get; set; } // "connection" | "schema" | "ruleset"
+        public string Message { get; set; }
+    }
+
     public class ChannelSyncApiSurface : IService
     {
         private readonly ConnectionsStore connectionsStore;
@@ -184,12 +202,11 @@
                 }
                 else
                 {
-                    // This is the case that was previously silent and
-                    // confusing: the rule set saved fine, but nothing in the
-                    // Folder Tree currently has a Fetch pointing at it, so
-                    // there is genuinely nothing to sync — no fetch will run,
-                    // no URL will be logged, until a Fetch is added on the
-                    // Folder Tree tab referencing this rule set.
+                    // Genuinely nothing to sync yet — surfaced explicitly so
+                    // it isn't mistaken for a save failure. The Rule Sets
+                    // tab's own live Preview (see Post(PreviewRule) below) is
+                    // the primary way to confirm a rule works, independent
+                    // of whether any folder references it yet.
                     logger.Info(
                         "ChannelSync: {0} rule set(s) changed, but no folder-tree fetch currently references them — nothing to re-sync yet. Add a Fetch on the Folder Tree tab using this rule set to trigger a real sync.",
                         changedIds.Count);
@@ -200,60 +217,87 @@
         }
 
         public object Get(GetFolderTree r) => treeStore.Load();
+
         public object Post(SaveFolderTree r)
         {
             r.RootFolder.IsRoot = true;
-            treeStore.Save(new FolderTreeFile { RootFolder = r.RootFolder });
 
-            var warnings = ValidateFetchReferences(r.RootFolder);
+            var errors = ValidateFetchReferences(r.RootFolder);
+
+            if (errors.Count > 0)
+            {
+                logger.Warn(
+                    "ChannelSync: Folder tree save rejected — {0} fetch(es) reference something that no longer exists.",
+                    errors.Count);
+
+                return new { Success = false, Errors = errors };
+            }
+
+            treeStore.Save(new FolderTreeFile { RootFolder = r.RootFolder });
 
             logger.Info("ChannelSync: Folder tree saved — running a full sync now.");
             _ = syncTask.Execute(CancellationToken.None, new Progress<double>());
 
-            return new { Success = true, Warnings = warnings };
+            return new { Success = true };
         }
 
         /// <summary>
-        /// Checks every fetch in the tree against what's currently on disk for
-        /// connections/schemas/rule sets. Purely informational — does not block
-        /// the save or the resync, since a fetch referencing something missing
-        /// is already handled gracefully (skipped, logged) by FolderTreeSyncTask.
-        /// This just surfaces that same condition to the UI immediately instead
-        /// of leaving it to only show up in the server log.
+        /// Hard-fail check only: does every fetch's ConnectionId/
+        /// EndpointSchemaId/RuleSetId resolve to something that actually
+        /// exists? This blocks the save — there's no legitimate reason to
+        /// persist a fetch pointing at nothing. Deliberately does NOT check
+        /// live reachability or system-type mismatches here; those are
+        /// soft/informational (surfaced via each connection's persisted
+        /// LastTestSucceeded badge instead), since a connection being
+        /// temporarily offline is not a reason to refuse saving a tree that
+        /// references it correctly.
         /// </summary>
-        private List<string> ValidateFetchReferences(FolderNode root)
+        private List<FetchValidationError> ValidateFetchReferences(FolderNode root)
         {
-            var connectionsById = connectionsStore.Load().Connections.ToDictionary(c => c.Id, c => c, StringComparer.OrdinalIgnoreCase);
-            var schemasById = schemaStore.Load().Schemas.ToDictionary(s => s.Id, s => s, StringComparer.OrdinalIgnoreCase);
+            var connectionIds = new HashSet<string>(
+                connectionsStore.Load().Connections.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+            var schemaIds = new HashSet<string>(
+                schemaStore.Load().Schemas.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
             var ruleSetIds = new HashSet<string>(
                 ruleSetStore.Load().RuleSets.Select(rs => rs.Id), StringComparer.OrdinalIgnoreCase);
 
-            var warnings = new List<string>();
+            var errors = new List<FetchValidationError>();
 
             void Walk(FolderNode node)
             {
                 foreach (var fetch in node.Fetches)
                 {
-                    var missing = new List<string>();
-                    var hasConnection = connectionsById.TryGetValue(fetch.ConnectionId, out var connection);
-                    var hasSchema = schemasById.TryGetValue(fetch.EndpointSchemaId, out var schema);
-
-                    if (!hasConnection) missing.Add("connection");
-                    if (!hasSchema) missing.Add("endpoint");
-                    if (!ruleSetIds.Contains(fetch.RuleSetId)) missing.Add("rule set");
-
-                    if (missing.Count > 0)
+                    if (!connectionIds.Contains(fetch.ConnectionId))
                     {
-                        warnings.Add(string.Format(
-                            "Folder '{0}', fetch '{1}': missing {2} — this fetch will be skipped until fixed.",
-                            node.DisplayName, fetch.DisplayLabel, string.Join(" + ", missing)));
+                        errors.Add(new FetchValidationError
+                        {
+                            FolderId = node.Id,
+                            FetchId = fetch.Id,
+                            Field = "connection",
+                            Message = string.Format("Folder '{0}', fetch '{1}': connection no longer exists.", node.DisplayName, fetch.DisplayLabel)
+                        });
                     }
-                    else if (!string.IsNullOrEmpty(connection.SystemType) && !string.IsNullOrEmpty(schema.SystemType) &&
-                             !string.Equals(connection.SystemType, schema.SystemType, StringComparison.OrdinalIgnoreCase))
+
+                    if (!schemaIds.Contains(fetch.EndpointSchemaId))
                     {
-                        warnings.Add(string.Format(
-                            "Folder '{0}', fetch '{1}': connection is a '{2}' system but the endpoint is '{3}' — this fetch will be skipped.",
-                            node.DisplayName, fetch.DisplayLabel, connection.SystemType, schema.SystemType));
+                        errors.Add(new FetchValidationError
+                        {
+                            FolderId = node.Id,
+                            FetchId = fetch.Id,
+                            Field = "schema",
+                            Message = string.Format("Folder '{0}', fetch '{1}': endpoint no longer exists.", node.DisplayName, fetch.DisplayLabel)
+                        });
+                    }
+
+                    if (!ruleSetIds.Contains(fetch.RuleSetId))
+                    {
+                        errors.Add(new FetchValidationError
+                        {
+                            FolderId = node.Id,
+                            FetchId = fetch.Id,
+                            Field = "ruleset",
+                            Message = string.Format("Folder '{0}', fetch '{1}': rule set no longer exists.", node.DisplayName, fetch.DisplayLabel)
+                        });
                     }
                 }
 
@@ -261,7 +305,7 @@
             }
 
             Walk(root);
-            return warnings;
+            return errors;
         }
 
         public async Task<object> Post(TestConnection r)
@@ -280,17 +324,70 @@
             };
 
             var (ok, message) = await fetchProvider.TestReachabilityAsync(probeConnection, schema, CancellationToken.None);
+
+            // If this connection also exists on disk, persist the badge so
+            // every tab that lists connections can show it without a live
+            // re-check. Harmless no-op if ConnectionId doesn't match anything
+            // saved yet (e.g. testing before the first Save).
+            if (!string.IsNullOrEmpty(r.ConnectionId))
+            {
+                var file = connectionsStore.Load();
+                var saved = file.Connections.FirstOrDefault(c => string.Equals(c.Id, r.ConnectionId, StringComparison.OrdinalIgnoreCase));
+                if (saved != null)
+                {
+                    saved.LastTestSucceeded = ok;
+                    saved.LastTestedUtc = DateTimeOffset.UtcNow;
+                    connectionsStore.Save(file);
+                }
+            }
+
             return new { Success = ok, Message = message };
         }
 
-        public object Post(PreviewRule request)
+        /// <summary>
+        /// Cache-first live preview. Only performs a real HTTP fetch when
+        /// nothing has ever been cached for this connection+schema pair;
+        /// every subsequent rule edit re-evaluates against that same cached
+        /// payload. Deliberately does not require a folder-tree sync to have
+        /// run — a rule set should be fully testable on its own.
+        /// </summary>
+        public async Task<object> Post(PreviewRule request)
         {
-            var rawJson = lastResponseStore.Read(request.ConnectionId, request.EndpointSchemaId);
             var schema = schemaStore.Find(request.EndpointSchemaId);
+            var connection = connectionsStore.Load().Connections
+                .FirstOrDefault(c => string.Equals(c.Id, request.ConnectionId, StringComparison.OrdinalIgnoreCase));
 
-            if (schema == null)
+            if (schema == null || connection == null)
             {
-                return new { MatchCount = 0, Fields = new List<string>(), Matches = new List<object>() };
+                return new
+                {
+                    Status = "error",
+                    Message = "Connection or endpoint not found — save it first.",
+                    Fields = new List<string>(),
+                    Matches = new List<object>()
+                };
+            }
+
+            var rawJson = lastResponseStore.Read(request.ConnectionId, request.EndpointSchemaId);
+            bool haveCache = rawJson != "[]";
+
+            if (!haveCache)
+            {
+                var fetched = await fetchProvider.FetchRawAsync(connection, schema, CancellationToken.None);
+
+                if (fetched == null)
+                {
+                    return new
+                    {
+                        Status = "unavailable",
+                        Message = "No data available yet — the fetch failed. Check the connection on the Connections tab.",
+                        Fields = new List<string>(),
+                        Matches = new List<object>()
+                    };
+                }
+
+                lastResponseStore.Write(connection.Id, schema.Id, fetched);
+                rawJson = fetched;
             }
 
             var fields = CollectFields(request.Rule, new List<string>());
@@ -313,7 +410,13 @@
                     }
                 }
 
-                return new { MatchCount = matchCount, Fields = fields, Matches = rows };
+                return new
+                {
+                    Status = "ok",
+                    MatchCount = matchCount,
+                    Fields = fields,
+                    Matches = rows
+                };
             }
         }
 

@@ -142,24 +142,22 @@ namespace SyncChannel.Fetching
                                 .Replace("{baseUrl}", connection.BaseUrl.TrimEnd('/'))
                                 .Replace("{identity}", identity);
 
-                            item.ProviderIds["SourceUrl"] = resolvedUrl;
+                            bool isRadarr = string.Equals(schema.SystemType, "radarr", StringComparison.OrdinalIgnoreCase);
+                            bool isSonarr = string.Equals(schema.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase);
 
-                            // Native provider-id badges for the two known
-                            // built-in systems. Stored as the resolved URL
-                            // (not the raw slug the ProviderIdFields loop
-                            // above just wrote) since IExternalId.UrlFormatString
-                            // has no access to which connection produced the
-                            // item — same reasoning as SourceUrl, just under
-                            // a provider-specific key so Emby's metadata
-                            // editor shows a distinct "Radarr"/"Sonarr" badge
-                            // rather than only the generic "Source" one.
-                            if (string.Equals(schema.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
+                            if (isRadarr)
                             {
                                 item.ProviderIds["RadarrId"] = resolvedUrl;
                             }
-                            else if (string.Equals(schema.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
+                            else if (isSonarr)
                             {
                                 item.ProviderIds["SonarrId"] = resolvedUrl;
+                            }
+                            else
+                            {
+                                // No dedicated badge for this system — generic "Source" link is the
+                                // only click-through available, so it's worth keeping here.
+                                item.ProviderIds["SourceUrl"] = resolvedUrl;
                             }
                         }
 
