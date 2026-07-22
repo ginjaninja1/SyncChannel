@@ -47,11 +47,16 @@
 
             file ??= new EndpointSchemasFile();
 
-            // Re-seed any missing built-ins on every load — cheap, idempotent,
+            // Re-seed (or refresh) built-ins on every load — cheap, idempotent,
             // and means a user who deletes a built-in by mistake gets it back
-            // rather than silently losing Radarr/Sonarr support.
-            bool changed = EnsureBuiltIn(file, BuildRadarrMovies());
-            changed |= EnsureBuiltIn(file, BuildSonarrSeries());
+            // rather than silently losing Radarr/Sonarr support. Built-ins are
+            // code-owned (SaveEndpointSchemas already strips and re-adds them
+            // on every save), so an existing on-disk copy is fully REPLACED
+            // with the current code's definition rather than left alone —
+            // otherwise a schema saved before a new field (e.g. SystemType)
+            // was added would keep loading with that field permanently blank.
+            bool changed = ReplaceBuiltIn(file, BuildRadarrMovies());
+            changed |= ReplaceBuiltIn(file, BuildSonarrSeries());
 
             if (changed || !File.Exists(path))
             {
@@ -76,12 +81,40 @@
             return Load().Schemas.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
         }
 
-        private static bool EnsureBuiltIn(EndpointSchemasFile file, EndpointSchema builtIn)
+        // Always brings the stored built-in in line with the current code
+        // definition. Returns true if the file changed (either a fresh add,
+        // or an existing stale copy was replaced) so the caller knows
+        // whether to re-save.
+        private static bool ReplaceBuiltIn(EndpointSchemasFile file, EndpointSchema builtIn)
         {
-            if (file.Schemas.Any(s => string.Equals(s.Id, builtIn.Id, StringComparison.OrdinalIgnoreCase)))
-                return false;
+            var existingIndex = file.Schemas.FindIndex(
+                s => string.Equals(s.Id, builtIn.Id, StringComparison.OrdinalIgnoreCase));
 
-            file.Schemas.Add(builtIn);
+            if (existingIndex < 0)
+            {
+                file.Schemas.Add(builtIn);
+                return true;
+            }
+
+            var existing = file.Schemas[existingIndex];
+            bool identical =
+                existing.SystemType == builtIn.SystemType &&
+                existing.DisplayName == builtIn.DisplayName &&
+                existing.Path == builtIn.Path &&
+                existing.IdentityField == builtIn.IdentityField &&
+                existing.TitleField == builtIn.TitleField &&
+                existing.OriginalTitleField == builtIn.OriginalTitleField &&
+                existing.YearField == builtIn.YearField &&
+                existing.OverviewField == builtIn.OverviewField &&
+                existing.PosterUrlField == builtIn.PosterUrlField &&
+                existing.DetailUrlFormat == builtIn.DetailUrlFormat;
+
+            if (identical)
+            {
+                return false;
+            }
+
+            file.Schemas[existingIndex] = builtIn;
             return true;
         }
 
@@ -93,6 +126,7 @@
             Id = RadarrMoviesId,
             DisplayName = "Radarr — Movies",
             IsBuiltIn = true,
+            SystemType = "radarr",
             Path = "/api/v3/movie",
             AuthStyle = EndpointAuthStyle.ApiKeyQueryAndHeader,
             IdentityField = "titleSlug",
@@ -101,7 +135,7 @@
             YearField = "year",
             OverviewField = "overview",
             PosterUrlField = "images", // resolved specially — see HttpFetchProvider.ResolvePoster
-            DetailUrlFormat = "{baseUrl}/movie/{identity}",   // <-- add this line
+            DetailUrlFormat = "{baseUrl}/movie/{identity}",
             ProviderIdFields = new Dictionary<string, string>
             {
                 ["Tmdb"] = "tmdbId",
@@ -144,6 +178,7 @@
             Id = SonarrSeriesId,
             DisplayName = "Sonarr — Series (unverified)",
             IsBuiltIn = true,
+            SystemType = "sonarr",
             Path = "/api/v3/series",
             AuthStyle = EndpointAuthStyle.ApiKeyQueryAndHeader,
             IdentityField = "titleSlug",

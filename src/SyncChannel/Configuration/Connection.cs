@@ -17,6 +17,12 @@ namespace SyncChannel.Configuration
         public string BaseUrl { get; set; } = string.Empty;
 
         public string ApiKey { get; set; } = string.Empty;
+
+        // Which product this connection points at — "radarr", "sonarr", etc.
+        // Must match an EndpointSchema's own SystemType before a Fetch is
+        // allowed to pair them. A connection is a single server; it can only
+        // ever speak the API shape of whatever's actually running there.
+        public string SystemType { get; set; } = string.Empty;
     }
 
     public class ConnectionsFile

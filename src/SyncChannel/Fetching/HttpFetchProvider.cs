@@ -37,11 +37,22 @@ namespace SyncChannel.Fetching
                 return null;
             }
 
+            if (!string.IsNullOrEmpty(connection.SystemType) && !string.IsNullOrEmpty(schema.SystemType) &&
+                !string.Equals(connection.SystemType, schema.SystemType, StringComparison.OrdinalIgnoreCase))
+            {
+                logger.Warn(
+                    "ChannelSync: Fetch skipped — connection '{0}' is system type '{1}' but schema '{2}' is '{3}'.",
+                    connection.DisplayLabel, connection.SystemType, schema.DisplayName, schema.SystemType);
+                return null;
+            }
+
             var baseUrl = connection.BaseUrl.TrimEnd('/') + schema.Path;
             var url = baseUrl + "?apikey=" + Uri.EscapeDataString(connection.ApiKey);
 
             var options = new HttpRequestOptions { Url = url, CancellationToken = cancellationToken };
             options.RequestHeaders["X-Api-Key"] = connection.ApiKey;
+
+            logger.Info("ChannelSync: Fetching {0}?apikey=***", baseUrl);
 
             try
             {
@@ -49,7 +60,9 @@ namespace SyncChannel.Fetching
                 using (var stream = response.Content)
                 using (var reader = new StreamReader(stream))
                 {
-                    return await reader.ReadToEndAsync().ConfigureAwait(false);
+                    var text = await reader.ReadToEndAsync().ConfigureAwait(false);
+                    logger.Info("ChannelSync: Fetch succeeded against {0} ({1} bytes).", baseUrl, text.Length);
+                    return text;
                 }
             }
             catch (Exception ex)
@@ -191,8 +204,18 @@ namespace SyncChannel.Fetching
         public async Task<(bool Success, string Message)> TestReachabilityAsync(
             ConnectionEntry connection, EndpointSchema schema, CancellationToken cancellationToken)
         {
+            if (!string.IsNullOrEmpty(connection.SystemType) && !string.IsNullOrEmpty(schema.SystemType) &&
+                !string.Equals(connection.SystemType, schema.SystemType, StringComparison.OrdinalIgnoreCase))
+            {
+                return (false, string.Format(
+                    "Connection is system type '{0}' but you're testing against a '{1}' endpoint — pick a matching endpoint.",
+                    connection.SystemType, schema.SystemType));
+            }
+
             var baseUrl = connection.BaseUrl.TrimEnd('/') + schema.Path;
             var url = baseUrl + "?apikey=" + Uri.EscapeDataString(connection.ApiKey);
+
+            logger.Info("ChannelSync: Testing connection against {0}?apikey=***", baseUrl);
 
             var options = new HttpRequestOptions
             {
@@ -206,11 +229,13 @@ namespace SyncChannel.Fetching
             {
                 using (var response = await httpClient.GetResponse(options).ConfigureAwait(false))
                 {
+                    logger.Info("ChannelSync: Test connection succeeded against {0}.", baseUrl);
                     return (true, "Reachable.");
                 }
             }
             catch (Exception ex)
             {
+                logger.ErrorException("ChannelSync: Test connection failed against {0}", ex, baseUrl);
                 return (false, ex.Message);
             }
         }

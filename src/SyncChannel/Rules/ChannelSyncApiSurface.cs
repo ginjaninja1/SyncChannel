@@ -35,7 +35,6 @@
     }
 
     // ---- Folder tree ----
-    // ---- Folder tree ----
     [Route("/ChannelSync/FolderTree", "GET")] public class GetFolderTree : IReturn<FolderTreeFile> { }
     [Route("/ChannelSync/FolderTree", "POST")] public class SaveFolderTree : IReturn<object> { public FolderNode RootFolder { get; set; } }
 
@@ -86,25 +85,32 @@
 
             var changedIds = r.Payload.Connections
                 .Where(c => !before.TryGetValue(c.Id, out var prior) ||
-                            prior.BaseUrl != c.BaseUrl || prior.ApiKey != c.ApiKey)
+                            prior.BaseUrl != c.BaseUrl || prior.ApiKey != c.ApiKey || prior.SystemType != c.SystemType)
                 .Select(c => c.Id)
                 .ToList();
+
+            var affectedFolders = new List<string>();
 
             if (changedIds.Count > 0)
             {
                 var tree = treeStore.Load();
-                var affectedFolders = changedIds
+                affectedFolders = changedIds
                     .SelectMany(id => FindFoldersUsingConnection(tree.RootFolder, id))
                     .Distinct()
                     .ToList();
 
                 if (affectedFolders.Count > 0)
                 {
+                    logger.Info("ChannelSync: {0} connection(s) changed — re-syncing {1} affected folder(s).", changedIds.Count, affectedFolders.Count);
                     _ = syncTask.SyncFoldersAndRefresh(affectedFolders, CancellationToken.None);
+                }
+                else
+                {
+                    logger.Info("ChannelSync: {0} connection(s) changed, but no folder-tree fetch currently references them — nothing to re-sync.", changedIds.Count);
                 }
             }
 
-            return new { Success = true };
+            return new { Success = true, AffectedFolderCount = affectedFolders.Count };
         }
 
         private static List<string> FindFoldersUsingConnection(FolderNode node, string connectionId)
@@ -127,8 +133,8 @@
         {
             // Built-ins are never overwritten by a client save — the client
             // only ever sends user-authored schemas back for its own edits;
-            // built-ins are re-seeded by EndpointSchemaStore.Load() on next
-            // read regardless.
+            // built-ins are re-seeded/refreshed by EndpointSchemaStore.Load()
+            // on next read regardless.
             r.Payload.Schemas.RemoveAll(s => s.IsBuiltIn);
             var current = schemaStore.Load();
             r.Payload.Schemas.AddRange(current.Schemas.Where(s => s.IsBuiltIn));
@@ -152,25 +158,43 @@
                 .Select(rs => rs.Id)
                 .ToList();
 
+            var affectedFolders = new List<string>();
+
             if (changedIds.Count > 0)
             {
                 var tree = treeStore.Load();
-                var affectedFolders = changedIds
+                affectedFolders = changedIds
                     .SelectMany(id => RuleSetStore.FindFoldersUsingRuleSet(tree.RootFolder, id))
                     .Distinct()
                     .ToList();
 
                 if (affectedFolders.Count > 0)
                 {
+                    logger.Info(
+                        "ChannelSync: {0} rule set(s) changed — re-syncing {1} affected folder(s).",
+                        changedIds.Count, affectedFolders.Count);
+
                     // Fire-and-forget is deliberate here — the HTTP caller
                     // (the rule editor's Save button) shouldn't block on a
                     // full fetch+refresh round trip. Errors are logged
                     // inside SyncFoldersAndRefresh/its callees.
                     _ = syncTask.SyncFoldersAndRefresh(affectedFolders, CancellationToken.None);
                 }
+                else
+                {
+                    // This is the case that was previously silent and
+                    // confusing: the rule set saved fine, but nothing in the
+                    // Folder Tree currently has a Fetch pointing at it, so
+                    // there is genuinely nothing to sync — no fetch will run,
+                    // no URL will be logged, until a Fetch is added on the
+                    // Folder Tree tab referencing this rule set.
+                    logger.Info(
+                        "ChannelSync: {0} rule set(s) changed, but no folder-tree fetch currently references them — nothing to re-sync yet. Add a Fetch on the Folder Tree tab using this rule set to trigger a real sync.",
+                        changedIds.Count);
+                }
             }
 
-            return new { Success = true };
+            return new { Success = true, AffectedFolderCount = affectedFolders.Count, ChangedRuleSetCount = changedIds.Count };
         }
 
         public object Get(GetFolderTree r) => treeStore.Load();
@@ -181,6 +205,7 @@
 
             var warnings = ValidateFetchReferences(r.RootFolder);
 
+            logger.Info("ChannelSync: Folder tree saved — running a full sync now.");
             _ = syncTask.Execute(CancellationToken.None, new Progress<double>());
 
             return new { Success = true, Warnings = warnings };
@@ -196,10 +221,8 @@
         /// </summary>
         private List<string> ValidateFetchReferences(FolderNode root)
         {
-            var connectionIds = new HashSet<string>(
-                connectionsStore.Load().Connections.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
-            var schemaIds = new HashSet<string>(
-                schemaStore.Load().Schemas.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+            var connectionsById = connectionsStore.Load().Connections.ToDictionary(c => c.Id, c => c, StringComparer.OrdinalIgnoreCase);
+            var schemasById = schemaStore.Load().Schemas.ToDictionary(s => s.Id, s => s, StringComparer.OrdinalIgnoreCase);
             var ruleSetIds = new HashSet<string>(
                 ruleSetStore.Load().RuleSets.Select(rs => rs.Id), StringComparer.OrdinalIgnoreCase);
 
@@ -210,8 +233,11 @@
                 foreach (var fetch in node.Fetches)
                 {
                     var missing = new List<string>();
-                    if (!connectionIds.Contains(fetch.ConnectionId)) missing.Add("connection");
-                    if (!schemaIds.Contains(fetch.EndpointSchemaId)) missing.Add("endpoint");
+                    var hasConnection = connectionsById.TryGetValue(fetch.ConnectionId, out var connection);
+                    var hasSchema = schemasById.TryGetValue(fetch.EndpointSchemaId, out var schema);
+
+                    if (!hasConnection) missing.Add("connection");
+                    if (!hasSchema) missing.Add("endpoint");
                     if (!ruleSetIds.Contains(fetch.RuleSetId)) missing.Add("rule set");
 
                     if (missing.Count > 0)
@@ -219,6 +245,13 @@
                         warnings.Add(string.Format(
                             "Folder '{0}', fetch '{1}': missing {2} — this fetch will be skipped until fixed.",
                             node.DisplayName, fetch.DisplayLabel, string.Join(" + ", missing)));
+                    }
+                    else if (!string.IsNullOrEmpty(connection.SystemType) && !string.IsNullOrEmpty(schema.SystemType) &&
+                             !string.Equals(connection.SystemType, schema.SystemType, StringComparison.OrdinalIgnoreCase))
+                    {
+                        warnings.Add(string.Format(
+                            "Folder '{0}', fetch '{1}': connection is a '{2}' system but the endpoint is '{3}' — this fetch will be skipped.",
+                            node.DisplayName, fetch.DisplayLabel, connection.SystemType, schema.SystemType));
                     }
                 }
 

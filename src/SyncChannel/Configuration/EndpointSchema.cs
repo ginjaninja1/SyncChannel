@@ -36,6 +36,13 @@ namespace SyncChannel.Configuration
 
         public string DisplayName { get; set; } = string.Empty;
 
+        // "radarr", "sonarr", etc. — must match ConnectionEntry.SystemType
+        // for a Fetch to be allowed to pair them. A user-authored schema
+        // declares its own value here (free text) rather than picking from a
+        // fixed enum, so a new self-hosted *arr-family app doesn't require a
+        // code change.
+        public string SystemType { get; set; } = string.Empty;
+
         // Marks Radarr/Sonarr's built-in seeds so the UI can label them
         // "built-in" and the store can re-seed them if ever deleted. Not
         // otherwise treated specially by fetch/evaluation code — a

@@ -219,10 +219,27 @@
     // Rule-set state (module-scoped so the Rule Sets tab, the palette, and
     // the folder tree's Add-Fetch dropdown can all read the same lists).
     // ===================================================================
-    var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey }]
-    var schemas = [];               // [{ Id, DisplayName, Fields: [{Key/JsonPath, DisplayName, Type}] }]
+    var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey, SystemType }]
+    var schemas = [];               // [{ Id, DisplayName, SystemType, Fields: [{Key/JsonPath, DisplayName, Type}] }]
     var ruleSetsFile = null;        // { RuleSets: [{ Id, Name, EndpointSchemaId, Root }] }
     var currentRuleSetIndex = -1;   // index into ruleSetsFile.RuleSets bound to the canvas
+
+    // ---- SystemType filtering helpers ----
+    // A connection points at exactly one product (Radarr, Sonarr, etc.) via
+    // its SystemType. An EndpointSchema declares the same SystemType it
+    // requires. These two helpers are the single place that relationship is
+    // enforced client-side; every dropdown that lists schemas alongside a
+    // chosen connection (or vice versa) should filter through these rather
+    // than listing everything.
+    function schemasForSystemType(systemType) {
+        if (!systemType) return schemas;
+        return schemas.filter(function (s) { return s.SystemType === systemType; });
+    }
+
+    function connectionSystemType(connectionId) {
+        var c = connections.filter(function (x) { return x.Id === connectionId; })[0];
+        return c ? c.SystemType : '';
+    }
 
     function schemaFields(schemaId) {
         var schema = schemas.filter(function (s) { return s.Id === schemaId; })[0];
@@ -806,9 +823,11 @@
 
     function captureCurrentEditsIntoFile(view) {
         if (currentRuleSetIndex < 0) return;
+        var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
+        if (!current) return; // index no longer valid (e.g. array was just spliced by a delete) — nothing to capture
         var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
         if (!rootGroupEl) return;
-        ruleSetsFile.RuleSets[currentRuleSetIndex].Root = readGroupFromDom(rootGroupEl);
+        current.Root = readGroupFromDom(rootGroupEl);
     }
 
     function renderRuleSetSelect(view) {
@@ -870,6 +889,26 @@
         renderCanvasForCurrentIndex(view);
     }
 
+    // Rebuilds the #rcsSchemaSelect option list to only schemas matching the
+    // currently selected connection's SystemType, then cascades into the
+    // rule-set selector via onSchemaChanged. Called on initial load and
+    // whenever the connection dropdown changes.
+    function rebuildRuleSetsSchemaOptions(view) {
+        var connSel = view.querySelector('#rcsConnectionSelect');
+        var schemaSel = view.querySelector('#rcsSchemaSelect');
+        var allowed = schemasForSystemType(connectionSystemType(connSel.value));
+        var currentVal = schemaSel.value;
+
+        schemaSel.innerHTML = '';
+        allowed.forEach(function (s) {
+            var o = document.createElement('option');
+            o.value = s.Id;
+            o.innerText = s.DisplayName;
+            if (s.Id === currentVal) o.selected = true;
+            schemaSel.appendChild(o);
+        });
+    }
+
     function renderConnectionAndSchemaSelects(view) {
         var connSel = view.querySelector('#rcsConnectionSelect');
         connSel.innerHTML = '';
@@ -880,16 +919,14 @@
             connSel.appendChild(o);
         });
 
-        var schemaSel = view.querySelector('#rcsSchemaSelect');
-        schemaSel.innerHTML = '';
-        schemas.forEach(function (s) {
-            var o = document.createElement('option');
-            o.value = s.Id;
-            o.innerText = s.DisplayName;
-            schemaSel.appendChild(o);
+        rebuildRuleSetsSchemaOptions(view);
+
+        connSel.addEventListener('change', function () {
+            rebuildRuleSetsSchemaOptions(view);
+            onSchemaChanged(view);
         });
 
-        connSel.addEventListener('change', function () { scheduleAutoPreview(view); });
+        var schemaSel = view.querySelector('#rcsSchemaSelect');
         schemaSel.addEventListener('change', function () { onSchemaChanged(view); });
     }
 
@@ -928,8 +965,18 @@
             data: JSON.stringify({ Payload: ruleSetsFile }),
             contentType: 'application/json',
             dataType: 'json'
-        }).then(function () {
-            Dashboard.alert('Saved ' + ruleSetsFile.RuleSets.length + ' rule set(s). Any folders using a changed rule set are being re-synced now.');
+        }).then(function (result) {
+            var affected = (result && result.AffectedFolderCount) || 0;
+            if (affected > 0) {
+                Dashboard.alert(
+                    'Saved ' + ruleSetsFile.RuleSets.length + ' rule set(s). Re-syncing ' + affected +
+                    ' folder(s) that use a changed rule set now — check the server log for fetch activity.');
+            } else {
+                Dashboard.alert(
+                    'Saved ' + ruleSetsFile.RuleSets.length + ' rule set(s). Nothing was re-synced: no folder in the ' +
+                    'Folder Tree tab currently has a Fetch using this rule set yet, so there is nothing to fetch. ' +
+                    'Add a Fetch on the Folder Tree tab referencing it, then Save Folder Tree, to actually run it.');
+            }
         }).catch(function () {
             Dashboard.alert('Save failed — see server log.');
         });
@@ -950,9 +997,9 @@
         });
 
         view.querySelector('#rcsDuplicateRuleSet').addEventListener('click', function () {
-            if (currentRuleSetIndex < 0) { Dashboard.alert('No rule set selected to duplicate.'); return; }
             captureCurrentEditsIntoFile(view);
             var source = ruleSetsFile.RuleSets[currentRuleSetIndex];
+            if (currentRuleSetIndex < 0 || !source) { Dashboard.alert('No rule set selected to duplicate.'); return; }
             var name = prompt('Name for the duplicated rule set:', source.Name + ' copy');
             if (!name) return;
             var clone = JSON.parse(JSON.stringify(source));
@@ -963,8 +1010,8 @@
         });
 
         view.querySelector('#rcsRenameRuleSet').addEventListener('click', function () {
-            if (currentRuleSetIndex < 0) { Dashboard.alert('No rule set selected to rename.'); return; }
             var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
+            if (currentRuleSetIndex < 0 || !current) { Dashboard.alert('No rule set selected to rename.'); return; }
             var name = prompt('Rename rule set:', current.Name);
             if (!name) return;
             current.Name = name.trim();
@@ -972,8 +1019,11 @@
         });
 
         view.querySelector('#rcsDeleteRuleSet').addEventListener('click', function () {
-            if (currentRuleSetIndex < 0) { Dashboard.alert('No rule set selected to delete.'); return; }
             var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
+            if (currentRuleSetIndex < 0 || !current) {
+                Dashboard.alert('No rule set selected to delete.');
+                return;
+            }
             if (!confirm('Delete rule set "' + current.Name + '"? Any folder-tree fetch still referencing it will fall back to the first available rule set for that endpoint on its next sync.')) {
                 return;
             }
@@ -1010,8 +1060,9 @@
 
     // Add/Edit-fetch form: three dropdowns (Connection / Endpoint / Rule
     // set) instead of the old provider-picker + generated settings form.
-    // Rule set options are filtered to the selected Endpoint, same
-    // structural guard as the Rule Sets tab.
+    // Endpoint options are filtered to the selected Connection's SystemType,
+    // and Rule set options are filtered to the selected Endpoint — same
+    // structural guard as the Rule Sets tab, cascaded one level further.
     function openFetchFieldForm(container, folderNode, existingFetch, onChange) {
         container.innerHTML = '';
 
@@ -1061,7 +1112,7 @@
 
         var schemaSelect = makeSelectField(
             'Endpoint',
-            schemas.map(function (s) { return { value: s.Id, text: s.DisplayName }; }),
+            schemasForSystemType(connectionSystemType(connSelect.value)).map(function (s) { return { value: s.Id, text: s.DisplayName }; }),
             existingFetch ? existingFetch.EndpointSchemaId : (schemas[0] && schemas[0].Id));
 
         var ruleSetSelect;
@@ -1070,8 +1121,6 @@
             var schemaId = schemaSelect.value;
             var matching = ruleSetsFile.RuleSets.filter(function (rs) { return rs.EndpointSchemaId === schemaId; });
             var currentVal = ruleSetSelect ? ruleSetSelect.value : (existingFetch ? existingFetch.RuleSetId : null);
-
-            if (ruleSetSelect) ruleSetSelect.parentNode.removeChild(ruleSetSelect.parentNode.lastChild ? ruleSetSelect.parentNode : ruleSetSelect);
 
             var wrap = document.createElement('div');
             wrap.className = 'ftField';
@@ -1106,11 +1155,30 @@
             wrap.classList.add('ftRuleSetFieldWrap');
         }
 
+        // Rebuilds the Endpoint dropdown to only schemas matching the
+        // currently selected Connection's SystemType, preserving the current
+        // selection if it's still valid, then cascades into the rule-set
+        // rebuild since the endpoint may have changed underneath it.
+        function rebuildSchemaOptions() {
+            var allowed = schemasForSystemType(connectionSystemType(connSelect.value));
+            var currentVal = schemaSelect.value;
+            schemaSelect.innerHTML = '';
+            allowed.forEach(function (s) {
+                var o = document.createElement('option');
+                o.value = s.Id;
+                o.innerText = s.DisplayName;
+                if (s.Id === currentVal) o.selected = true;
+                schemaSelect.appendChild(o);
+            });
+            rebuildRuleSetOptions();
+        }
+
         var ruleSetPlaceholder = document.createElement('div');
         ruleSetPlaceholder.className = 'ftField ftRuleSetFieldWrap';
         panel.appendChild(ruleSetPlaceholder);
         rebuildRuleSetOptions();
 
+        connSelect.addEventListener('change', rebuildSchemaOptions);
         schemaSelect.addEventListener('change', rebuildRuleSetOptions);
 
         var btnRow = document.createElement('div');
@@ -1371,6 +1439,8 @@
     // ===================================================================
     // Connections tab
     // ===================================================================
+    var KNOWN_SYSTEM_TYPES = ['radarr', 'sonarr'];
+
     function renderConnectionsTab(view) {
         var list = view.querySelector('#connList');
         list.innerHTML = '';
@@ -1391,44 +1461,64 @@
             urlInput.placeholder = 'http://127.0.0.1:7878';
             urlInput.addEventListener('input', function (e) { c.BaseUrl = e.target.value; });
 
+            // System-type picker — which product (Radarr/Sonarr/etc.) this
+            // connection actually points at. Drives which EndpointSchemas
+            // this connection is offered alongside elsewhere in the UI, and
+            // which schema Test Connection uses.
+            var typeSelect = document.createElement('select');
+            KNOWN_SYSTEM_TYPES.forEach(function (t) {
+                var o = document.createElement('option');
+                o.value = t;
+                o.innerText = t;
+                if (c.SystemType === t) o.selected = true;
+                typeSelect.appendChild(o);
+            });
+            if (!c.SystemType) {
+                // Default to the first entry so a never-set connection isn't
+                // silently blank — but don't overwrite an existing value.
+                c.SystemType = KNOWN_SYSTEM_TYPES[0];
+                typeSelect.value = c.SystemType;
+            }
+            typeSelect.addEventListener('change', function (e) { c.SystemType = e.target.value; });
+
             var keyWrap = document.createElement('span');
-keyWrap.style.display = 'inline-flex';
-keyWrap.style.alignItems = 'center';
-keyWrap.style.gap = '0.3em';
+            keyWrap.style.display = 'inline-flex';
+            keyWrap.style.alignItems = 'center';
+            keyWrap.style.gap = '0.3em';
 
-var keyInput = document.createElement('input');
-keyInput.type = 'password';
-keyInput.style.width = '12em';
-keyInput.value = c.ApiKey;
-keyInput.placeholder = 'API key';
+            var keyInput = document.createElement('input');
+            keyInput.type = 'password';
+            keyInput.style.width = '12em';
+            keyInput.value = c.ApiKey;
+            keyInput.placeholder = 'API key';
 
-var keyLenBadge = document.createElement('span');
-keyLenBadge.style.fontSize = '0.75em';
-keyLenBadge.style.opacity = '0.6';
-keyLenBadge.style.minWidth = '3em';
+            var keyLenBadge = document.createElement('span');
+            keyLenBadge.style.fontSize = '0.75em';
+            keyLenBadge.style.opacity = '0.6';
+            keyLenBadge.style.minWidth = '3em';
 
-function refreshKeyLen() {
-    keyLenBadge.innerText = '[' + c.ApiKey.length + ' chars]';
-}
-refreshKeyLen();
+            function refreshKeyLen() {
+                keyLenBadge.innerText = '[' + c.ApiKey.length + ' chars]';
+            }
+            refreshKeyLen();
 
-keyInput.addEventListener('input', function (e) {
-    c.ApiKey = e.target.value;
-    refreshKeyLen();
-});
+            keyInput.addEventListener('input', function (e) {
+                c.ApiKey = e.target.value;
+                refreshKeyLen();
+            });
 
-var toggleBtn = document.createElement('span');
-toggleBtn.className = 'ftIconBtn';
-toggleBtn.style.cursor = 'pointer';
-toggleBtn.title = 'Show/hide API key';
-toggleBtn.innerText = '👁';
-toggleBtn.addEventListener('click', function () {
-    keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
-});
+            var toggleBtn = document.createElement('span');
+            toggleBtn.className = 'ftIconBtn';
+            toggleBtn.style.cursor = 'pointer';
+            toggleBtn.title = 'Show/hide API key';
+            toggleBtn.innerText = '👁';
+            toggleBtn.addEventListener('click', function () {
+                keyInput.type = keyInput.type === 'password' ? 'text' : 'password';
+            });
 
-keyWrap.appendChild(keyInput);
-keyWrap.appendChild(toggleBtn);
-keyWrap.appendChild(keyLenBadge);
+            keyWrap.appendChild(keyInput);
+            keyWrap.appendChild(toggleBtn);
+            keyWrap.appendChild(keyLenBadge);
 
             var removeBtn = document.createElement('span');
             removeBtn.className = 'ftIconBtn';
@@ -1452,7 +1542,20 @@ keyWrap.appendChild(keyLenBadge);
 
             testBtn.addEventListener('click', function () {
                 testStatus.innerText = 'Testing…';
-                var schemaId = schemas.length ? schemas[0].Id : '';
+
+                // Use a schema that actually matches this connection's
+                // SystemType — previously this always tested against the
+                // first-loaded schema (usually Radarr Movies), so testing a
+                // Sonarr connection silently hit the Radarr movie path and
+                // failed for the wrong reason.
+                var matching = schemasForSystemType(c.SystemType);
+                var schemaId = matching.length ? matching[0].Id : (schemas.length ? schemas[0].Id : '');
+
+                if (!schemaId) {
+                    testStatus.innerText = '❌ No endpoint schema available for system type "' + c.SystemType + '".';
+                    return;
+                }
+
                 ApiClient.ajax({
                     type: 'POST',
                     url: ApiClient.getUrl('ChannelSync/TestConnection'),
@@ -1468,6 +1571,7 @@ keyWrap.appendChild(keyLenBadge);
 
             row.appendChild(labelInput);
             row.appendChild(urlInput);
+            row.appendChild(typeSelect);
             row.appendChild(keyWrap);
             row.appendChild(testBtn);
             row.appendChild(testStatus);
@@ -1571,7 +1675,7 @@ keyWrap.appendChild(keyLenBadge);
             view.querySelector('#ftSaveBtn').addEventListener('click', function () { saveFolderTree(view); });
 
             view.querySelector('#connAddBtn').addEventListener('click', function () {
-                connections.push({ Id: newId(), DisplayLabel: 'New Connection', BaseUrl: '', ApiKey: '' });
+                connections.push({ Id: newId(), DisplayLabel: 'New Connection', BaseUrl: '', ApiKey: '', SystemType: KNOWN_SYSTEM_TYPES[0] });
                 renderConnectionsTab(view);
             });
             view.querySelector('#connSaveBtn').addEventListener('click', function () { saveConnections(view); });
