@@ -98,16 +98,17 @@
 
             var existing = file.Schemas[existingIndex];
             bool identical =
-                existing.SystemType == builtIn.SystemType &&
-                existing.DisplayName == builtIn.DisplayName &&
-                existing.Path == builtIn.Path &&
-                existing.IdentityField == builtIn.IdentityField &&
-                existing.TitleField == builtIn.TitleField &&
-                existing.OriginalTitleField == builtIn.OriginalTitleField &&
-                existing.YearField == builtIn.YearField &&
-                existing.OverviewField == builtIn.OverviewField &&
-                existing.PosterUrlField == builtIn.PosterUrlField &&
-                existing.DetailUrlFormat == builtIn.DetailUrlFormat;
+    existing.SystemType == builtIn.SystemType &&
+    existing.DisplayName == builtIn.DisplayName &&
+    existing.ObjectKind == builtIn.ObjectKind &&
+    existing.Path == builtIn.Path &&
+    existing.IdentityField == builtIn.IdentityField &&
+    existing.TitleField == builtIn.TitleField &&
+    existing.OriginalTitleField == builtIn.OriginalTitleField &&
+    existing.YearField == builtIn.YearField &&
+    existing.OverviewField == builtIn.OverviewField &&
+    existing.PosterUrlField == builtIn.PosterUrlField &&
+    existing.DetailUrlFormat == builtIn.DetailUrlFormat;
 
             if (identical)
             {
@@ -127,6 +128,7 @@
             DisplayName = "Radarr — Movies",
             IsBuiltIn = true,
             SystemType = "radarr",
+            ObjectKind = ChannelObjectKind.FlatMedia,
             Path = "/api/v3/movie",
             AuthStyle = EndpointAuthStyle.ApiKeyQueryAndHeader,
             IdentityField = "titleSlug",
@@ -176,10 +178,12 @@
         private static EndpointSchema BuildSonarrSeries() => new EndpointSchema
         {
             Id = SonarrSeriesId,
-            DisplayName = "Sonarr — Series (unverified)",
+            DisplayName = "Sonarr — Series",
             IsBuiltIn = true,
             SystemType = "sonarr",
+            ObjectKind = ChannelObjectKind.Series,
             Path = "/api/v3/series",
+            // ...unchanged from here down...
             AuthStyle = EndpointAuthStyle.ApiKeyQueryAndHeader,
             IdentityField = "titleSlug",
             TitleField = "title",

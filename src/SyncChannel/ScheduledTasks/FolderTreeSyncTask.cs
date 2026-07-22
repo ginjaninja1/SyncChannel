@@ -208,7 +208,7 @@ namespace SyncChannel.ScheduledTasks
                 // per-fetch key needed to carry forward this specific
                 // fetch's contribution on a future partial failure (a
                 // folder can have multiple fetches against the same schema).
-                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id)));
+                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, schema.ObjectKind)));
             }
 
             if (anyAttempted)
@@ -225,10 +225,11 @@ namespace SyncChannel.ScheduledTasks
             }
         }
 
-        private static CachedChannelItem ToCache(FetchedItem item, string fetchInstanceId) => new CachedChannelItem
+        private static CachedChannelItem ToCache(FetchedItem item, string fetchInstanceId, ChannelObjectKind kind) => new CachedChannelItem
         {
             ProviderKey = fetchInstanceId,
             StableId = item.StableId,
+            ObjectKind = kind,
             Title = item.Title,
             OriginalTitle = item.OriginalTitle,
             Year = item.Year,

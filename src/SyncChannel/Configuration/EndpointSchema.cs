@@ -19,6 +19,16 @@ namespace SyncChannel.Configuration
 
     public enum SchemaFieldType { String, Number, Bool, List }
 
+    // Which kind of Emby channel object this schema's items should become.
+    // FlatMedia -> a single playable ChannelItemInfo (Type=Media), the
+    // existing Radarr-movie shape. Series -> a ChannelFolderType.Series
+    // folder, with a synthesized Season 1 / Episode 1 underneath pointing
+    // at the shared stub video (see SyncFolderChannel). No implicit
+    // default — every schema, built-in or user-authored, states this
+    // explicitly, since guessing wrong here is exactly what caused Sonarr
+    // items to be misidentified as movies.
+    public enum ChannelObjectKind { FlatMedia, Series }
+
     public class SchemaField
     {
         // Dotted JSON path into each array element, e.g. "ratings.imdb.value".
@@ -48,6 +58,10 @@ namespace SyncChannel.Configuration
         // otherwise treated specially by fetch/evaluation code — a
         // user-authored schema works identically.
         public bool IsBuiltIn { get; set; }
+
+        // Which Emby channel object this schema's items become. See
+        // ChannelObjectKind above.
+        public ChannelObjectKind ObjectKind { get; set; }
 
         // Appended to Connection.BaseUrl, e.g. "/api/v3/movie".
         public string Path { get; set; } = string.Empty;

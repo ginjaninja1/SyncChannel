@@ -23,6 +23,9 @@ namespace SyncChannel.Channels
     {
         private const string FolderIdPrefix = "syncchannel-folder-";
         private const string ItemIdPrefix = "syncchannel-item-";
+        private const string SeriesIdPrefix = "syncchannel-series-";
+        private const string SeasonIdPrefix = "syncchannel-season-";
+        private const string EpisodeIdPrefix = "syncchannel-episode-";
 
         private readonly FolderTreeStore treeStore;
         private readonly FolderCacheStore cacheStore;
@@ -41,10 +44,6 @@ namespace SyncChannel.Channels
             this.logger = logger;
         }
 
-        // Restored: reads from config again, same as the original Radarr
-        // channel's RadarrChannelName. A rename orphans the old Channel DB
-        // row — ChannelIdentityReconciler (wired via FolderTreeSyncTask and
-        // ConfigurationPageView's debounce) is what cleans that up.
         public string Name => SyncChannelPlugin.Instance.Configuration.ChannelName;
 
         public string Description => "Admin-organized coming-soon folders, synced from Radarr/Sonarr and other configured sources.";
@@ -72,6 +71,22 @@ namespace SyncChannel.Channels
 
         public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
+            // Synthetic Series -> Season -> Episode branch. Checked before
+            // the admin-folder-tree logic below, since these ids never
+            // correspond to a FolderNode.
+            if (!string.IsNullOrEmpty(query.FolderId))
+            {
+                if (query.FolderId.StartsWith(SeriesIdPrefix, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(BuildSeasonListing(query.FolderId));
+                }
+
+                if (query.FolderId.StartsWith(SeasonIdPrefix, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(BuildEpisodeListing(query.FolderId));
+                }
+            }
+
             var tree = treeStore.Load();
 
             FolderNode targetNode;
@@ -117,7 +132,10 @@ namespace SyncChannel.Channels
 
         public Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {
-            var folderId = ParseItemOwningFolderId(id);
+            string folderId = id.StartsWith(EpisodeIdPrefix, StringComparison.Ordinal)
+                ? ParseOwningFolderIdFromSyntheticId(id.Substring(EpisodeIdPrefix.Length))
+                : ParseItemOwningFolderId(id);
+
             var stubVideoPath = folderId == null
                 ? string.Empty
                 : cacheStore.Read(folderId).StubVideoPath;
@@ -147,6 +165,16 @@ namespace SyncChannel.Channels
         internal static string BuildItemId(string folderNodeId, string stableId) =>
             ItemIdPrefix + folderNodeId + "::" + stableId;
 
+        // Shared "folderNodeId::stableId" split, used both by flat media
+        // items (ItemIdPrefix) and by the synthetic series/season/episode
+        // chain (which wraps the same folderNodeId::stableId payload under
+        // extra prefixes).
+        private static string ParseFolderNodeIdFromPayload(string payload)
+        {
+            var separatorIndex = payload.IndexOf("::", StringComparison.Ordinal);
+            return separatorIndex < 0 ? null : payload.Substring(0, separatorIndex);
+        }
+
         private static string ParseItemOwningFolderId(string channelItemId)
         {
             if (channelItemId == null || !channelItemId.StartsWith(ItemIdPrefix, StringComparison.Ordinal))
@@ -154,9 +182,27 @@ namespace SyncChannel.Channels
                 return null;
             }
 
-            var remainder = channelItemId.Substring(ItemIdPrefix.Length);
-            var separatorIndex = remainder.IndexOf("::", StringComparison.Ordinal);
-            return separatorIndex < 0 ? null : remainder.Substring(0, separatorIndex);
+            return ParseFolderNodeIdFromPayload(channelItemId.Substring(ItemIdPrefix.Length));
+        }
+
+        // Strips whichever synthetic wrapper prefixes (Season/Series) are
+        // present, down to the raw "folderNodeId::stableId" payload, then
+        // extracts the folderNodeId the same way ParseItemOwningFolderId does.
+        private static string ParseOwningFolderIdFromSyntheticId(string seasonOrSeriesId)
+        {
+            var value = seasonOrSeriesId;
+
+            if (value.StartsWith(SeasonIdPrefix, StringComparison.Ordinal))
+            {
+                value = value.Substring(SeasonIdPrefix.Length);
+            }
+
+            if (value.StartsWith(SeriesIdPrefix, StringComparison.Ordinal))
+            {
+                value = value.Substring(SeriesIdPrefix.Length);
+            }
+
+            return ParseFolderNodeIdFromPayload(value);
         }
 
         private static ChannelItemInfo BuildFolderItem(FolderNode node) => new ChannelItemInfo
@@ -175,6 +221,11 @@ namespace SyncChannel.Channels
                 return null;
             }
 
+            if (item.ObjectKind == ChannelObjectKind.Series)
+            {
+                return BuildSeriesFolderItem(item, folderNodeId);
+            }
+
             var itemId = BuildItemId(folderNodeId, item.StableId);
 
             var info = new ChannelItemInfo
@@ -187,7 +238,8 @@ namespace SyncChannel.Channels
                 MediaType = ChannelMediaType.Video,
                 ContentType = ChannelMediaContentType.Movie,
                 ProductionYear = item.Year,
-                ImageUrl = item.PosterUrl
+                ImageUrl = item.PosterUrl,
+                ForceUpdate = true
             };
 
             foreach (var kvp in item.ProviderIds)
@@ -201,6 +253,83 @@ namespace SyncChannel.Channels
             }
 
             return info;
+        }
+
+        private static ChannelItemInfo BuildSeriesFolderItem(CachedChannelItem item, string folderNodeId)
+        {
+            var info = new ChannelItemInfo
+            {
+                Id = SeriesIdPrefix + folderNodeId + "::" + item.StableId,
+                Name = item.Title,
+                OriginalTitle = item.OriginalTitle,
+                Overview = item.Overview,
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.Series,
+                ProductionYear = item.Year,
+                ImageUrl = item.PosterUrl,
+                // GetChannelItemEntity only re-copies Name/Overview/
+                // ProviderIds/etc on isNew || ForceUpdate — and the
+                // Container-only "just refresh Name" fallback path
+                // explicitly excludes FolderType.Series. Without this,
+                // a Sonarr rename would never propagate on resync.
+                ForceUpdate = true
+            };
+
+            foreach (var kvp in item.ProviderIds)
+            {
+                info.ProviderIds[kvp.Key] = kvp.Value;
+            }
+
+            return info;
+        }
+
+        private ChannelItemResult BuildSeasonListing(string seriesId)
+        {
+            var season = new ChannelItemInfo
+            {
+                Id = SeasonIdPrefix + seriesId,
+                Name = "Season 1",
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.Season,
+                IndexNumber = 1,
+                ForceUpdate = true
+            };
+
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { season }, TotalRecordCount = 1 };
+        }
+
+        private ChannelItemResult BuildEpisodeListing(string seasonId)
+        {
+            var folderNodeId = ParseOwningFolderIdFromSyntheticId(seasonId);
+            var stubVideoPath = folderNodeId == null
+                ? string.Empty
+                : cacheStore.Read(folderNodeId).StubVideoPath;
+
+            if (string.IsNullOrEmpty(stubVideoPath))
+            {
+                stubVideoPath = ResolveDefaultStubPath();
+            }
+
+            var episodeId = EpisodeIdPrefix + seasonId;
+
+            var episode = new ChannelItemInfo
+            {
+                Id = episodeId,
+                Name = "Episode 1",
+                Type = ChannelItemType.Media,
+                MediaType = ChannelMediaType.Video,
+                ContentType = ChannelMediaContentType.Episode,
+                IndexNumber = 1,
+                ParentIndexNumber = 1,
+                ForceUpdate = true
+            };
+
+            if (!string.IsNullOrEmpty(stubVideoPath))
+            {
+                episode.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(episodeId, stubVideoPath) };
+            }
+
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { episode }, TotalRecordCount = 1 };
         }
 
         private static MediaSourceInfo BuildMediaSource(string itemId, string stubVideoPath) => new MediaSourceInfo
