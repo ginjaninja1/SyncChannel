@@ -42,7 +42,9 @@
     [Route("/ChannelSync/TestConnection", "POST")]
     public class TestConnection : IReturn<object>
     {
-        public string ConnectionId { get; set; }
+        public string BaseUrl { get; set; }
+        public string ApiKey { get; set; }
+        public string SystemType { get; set; }
         public string EndpointSchemaId { get; set; }
     }
     public class ChannelSyncApiSurface : IService
@@ -264,16 +266,20 @@
 
         public async Task<object> Post(TestConnection r)
         {
-            var connections = connectionsStore.Load();
-            var connection = connections.Connections.FirstOrDefault(c => c.Id == r.ConnectionId);
             var schema = schemaStore.Find(r.EndpointSchemaId);
-
-            if (connection == null || schema == null)
+            if (schema == null)
             {
-                return new { Success = false, Message = "Connection or endpoint not found." };
+                return new { Success = false, Message = "Endpoint schema not found." };
             }
 
-            var (ok, message) = await fetchProvider.TestReachabilityAsync(connection, schema, CancellationToken.None);
+            var probeConnection = new ConnectionEntry
+            {
+                BaseUrl = r.BaseUrl,
+                ApiKey = r.ApiKey,
+                SystemType = r.SystemType
+            };
+
+            var (ok, message) = await fetchProvider.TestReachabilityAsync(probeConnection, schema, CancellationToken.None);
             return new { Success = ok, Message = message };
         }
 

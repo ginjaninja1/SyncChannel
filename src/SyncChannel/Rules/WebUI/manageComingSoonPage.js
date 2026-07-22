@@ -1541,33 +1541,28 @@
             testStatus.style.opacity = '0.7';
 
             testBtn.addEventListener('click', function () {
-                testStatus.innerText = 'Testing…';
+    testStatus.innerText = 'Testing…';
 
-                // Use a schema that actually matches this connection's
-                // SystemType — previously this always tested against the
-                // first-loaded schema (usually Radarr Movies), so testing a
-                // Sonarr connection silently hit the Radarr movie path and
-                // failed for the wrong reason.
-                var matching = schemasForSystemType(c.SystemType);
-                var schemaId = matching.length ? matching[0].Id : (schemas.length ? schemas[0].Id : '');
+    var matching = schemasForSystemType(c.SystemType);
+    var schemaId = matching.length ? matching[0].Id : (schemas.length ? schemas[0].Id : '');
 
-                if (!schemaId) {
-                    testStatus.innerText = '❌ No endpoint schema available for system type "' + c.SystemType + '".';
-                    return;
-                }
+    if (!schemaId) {
+        testStatus.innerText = '❌ No endpoint schema available for system type "' + c.SystemType + '".';
+        return;
+    }
 
-                ApiClient.ajax({
-                    type: 'POST',
-                    url: ApiClient.getUrl('ChannelSync/TestConnection'),
-                    data: JSON.stringify({ ConnectionId: c.Id, EndpointSchemaId: schemaId }),
-                    contentType: 'application/json',
-                    dataType: 'json'
-                }).then(function (result) {
-                    testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
-                }).catch(function () {
-                    testStatus.innerText = '❌ Test request failed.';
-                });
-            });
+    ApiClient.ajax({
+        type: 'POST',
+        url: ApiClient.getUrl('ChannelSync/TestConnection'),
+        data: JSON.stringify({ BaseUrl: c.BaseUrl, ApiKey: c.ApiKey, SystemType: c.SystemType, EndpointSchemaId: schemaId }),
+        contentType: 'application/json',
+        dataType: 'json'
+    }).then(function (result) {
+        testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
+    }).catch(function () {
+        testStatus.innerText = '❌ Test request failed.';
+    });
+});
 
             row.appendChild(labelInput);
             row.appendChild(urlInput);
