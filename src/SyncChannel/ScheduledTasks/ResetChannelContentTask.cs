@@ -76,7 +76,7 @@
                 Recursive = true
             }).Items;
 
-            logger.Info("ChannelSync: Reset task deleting {0} item(s) under the Sync Channel.", toDelete.Count);
+            logger.Info("ChannelSync: Reset task deleting {0} item(s) under the Sync Channel.", toDelete.Length);
 
             int deleted = 0;
             foreach (var item in toDelete)
@@ -92,7 +92,7 @@
                 }
             }
 
-            logger.Info("ChannelSync: Reset task complete — deleted {0}/{1} item(s). Run 'Sync Coming Soon Folder Tree' next to repopulate.", deleted, toDelete.Count);
+            logger.Info("ChannelSync: Reset task complete — deleted {0}/{1} item(s). Run 'Sync Coming Soon Folder Tree' next to repopulate.", deleted, toDelete.Length);
             progress.Report(100);
 
             return Task.CompletedTask;

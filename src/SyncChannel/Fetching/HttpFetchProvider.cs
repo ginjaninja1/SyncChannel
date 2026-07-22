@@ -79,7 +79,8 @@ namespace SyncChannel.Fetching
         /// </summary>
         /// <param name="connection">
         /// Needed here (not just in FetchRawAsync) purely to build
-        /// ProviderIds["SourceUrl"] from schema.DetailUrlFormat, which
+        /// ProviderIds["SourceUrl"] (and the provider-specific RadarrId/
+        /// SonarrId link, below) from schema.DetailUrlFormat, which
         /// substitutes {baseUrl} from the connection and {identity} from
         /// each resolved item.
         /// </param>
@@ -137,9 +138,29 @@ namespace SyncChannel.Fetching
                         // one place both are in scope together.
                         if (!string.IsNullOrEmpty(schema.DetailUrlFormat) && connection != null)
                         {
-                            item.ProviderIds["SourceUrl"] = schema.DetailUrlFormat
+                            var resolvedUrl = schema.DetailUrlFormat
                                 .Replace("{baseUrl}", connection.BaseUrl.TrimEnd('/'))
                                 .Replace("{identity}", identity);
+
+                            item.ProviderIds["SourceUrl"] = resolvedUrl;
+
+                            // Native provider-id badges for the two known
+                            // built-in systems. Stored as the resolved URL
+                            // (not the raw slug the ProviderIdFields loop
+                            // above just wrote) since IExternalId.UrlFormatString
+                            // has no access to which connection produced the
+                            // item — same reasoning as SourceUrl, just under
+                            // a provider-specific key so Emby's metadata
+                            // editor shows a distinct "Radarr"/"Sonarr" badge
+                            // rather than only the generic "Source" one.
+                            if (string.Equals(schema.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
+                            {
+                                item.ProviderIds["RadarrId"] = resolvedUrl;
+                            }
+                            else if (string.Equals(schema.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
+                            {
+                                item.ProviderIds["SonarrId"] = resolvedUrl;
+                            }
                         }
 
                         results.Add(item);
