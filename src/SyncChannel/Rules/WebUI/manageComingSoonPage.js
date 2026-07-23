@@ -1350,6 +1350,29 @@
         header.appendChild(nameInput);
 
         if (!node.IsRoot) {
+            var imageUpdateLabel = document.createElement('label');
+            imageUpdateLabel.style.display = 'inline-flex';
+            imageUpdateLabel.style.alignItems = 'center';
+            imageUpdateLabel.style.gap = '0.3em';
+            imageUpdateLabel.style.fontSize = '0.85em';
+            imageUpdateLabel.style.opacity = '0.85';
+            imageUpdateLabel.style.marginLeft = '0.6em';
+
+            var imageUpdateCheckbox = document.createElement('input');
+            imageUpdateCheckbox.type = 'checkbox';
+            imageUpdateCheckbox.checked = !!node.ReplaceImageOnContentChange;
+            imageUpdateCheckbox.addEventListener('change', function () {
+                node.ReplaceImageOnContentChange = imageUpdateCheckbox.checked;
+            });
+
+            imageUpdateLabel.appendChild(imageUpdateCheckbox);
+            imageUpdateLabel.appendChild(document.createTextNode('Image Update'));
+            imageUpdateLabel.title = 'Off: folder image is built once and then left for you to manage manually. On: rebuilt whenever the 4 most recently added items change.';
+
+            header.appendChild(imageUpdateLabel);
+        }
+
+        if (!node.IsRoot) {
             var actions = document.createElement('span');
             actions.className = 'ftNodeActions';
 

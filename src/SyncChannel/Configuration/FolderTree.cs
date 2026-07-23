@@ -21,6 +21,12 @@ namespace SyncChannel.Configuration
         public bool IsRoot { get; set; }
         public List<FetchRuleInstance> Fetches { get; set; } = new List<FetchRuleInstance>();
         public List<FolderNode> Children { get; set; } = new List<FolderNode>();
+
+        // "Image Update" toggle, admin-facing. N (default): folder image is
+        // built once on first sync after the folder has content, then left
+        // alone for the admin to manage manually. Y: rebuild whenever the
+        // top-4-most-recent StableId set changes.
+        public bool ReplaceImageOnContentChange { get; set; } = true;
     }
 
     public class FetchRuleInstance

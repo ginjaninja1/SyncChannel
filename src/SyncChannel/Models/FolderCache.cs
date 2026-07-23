@@ -8,11 +8,15 @@
 namespace SyncChannel.Models
 {
     using SyncChannel.Configuration;
+    using System;
     using System.Collections.Generic;
 
     public class CachedChannelItem
     {
         public string ProviderKey { get; set; } = string.Empty;
+
+        /// <summary>When this StableId first appeared in this folder's cache — carried forward across syncs, never re-stamped once set.</summary>
+        public DateTimeOffset FirstSeenUtc { get; set; }
 
         /// <summary>The provider's permanent identity (e.g. Radarr's TitleSlug) — see FetchedItem.StableId.</summary>
         public string StableId { get; set; } = string.Empty;
@@ -42,5 +46,8 @@ namespace SyncChannel.Models
         /// everywhere points at it.
         /// </summary>
         public string StubVideoPath { get; set; } = string.Empty;
+
+        /// <summary>StableIds the folder's collage was last built from — used to detect "top-4 changed" without rebuilding every sync tick.</summary>
+        public List<string> LastCollageStableIds { get; set; } = new List<string>();
     }
 }

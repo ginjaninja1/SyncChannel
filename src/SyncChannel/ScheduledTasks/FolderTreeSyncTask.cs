@@ -31,6 +31,7 @@ namespace SyncChannel.ScheduledTasks
         private readonly ITaskManager taskManager;
         private readonly ILogger logger;
         private readonly ChannelIdentityReconciler reconciler;
+        private readonly FolderCollageBuilder collageBuilder;
 
         public FolderTreeSyncTask(
     FolderTreeStore treeStore,
@@ -42,7 +43,8 @@ namespace SyncChannel.ScheduledTasks
     Services.LastResponseCacheStore lastResponseStore,
     IChannelManager channelManager,
     ITaskManager taskManager,
-    ChannelIdentityReconciler reconciler,   // <-- was missing
+    ChannelIdentityReconciler reconciler,
+    FolderCollageBuilder collageBuilder,
     ILogger logger)
         {
             this.treeStore = treeStore;
@@ -54,7 +56,8 @@ namespace SyncChannel.ScheduledTasks
             this.lastResponseStore = lastResponseStore;
             this.channelManager = channelManager;
             this.taskManager = taskManager;
-            this.reconciler = reconciler;           // now actually assigned
+            this.reconciler = reconciler;
+            this.collageBuilder = collageBuilder;
             this.logger = logger;
         }
 
@@ -169,6 +172,10 @@ namespace SyncChannel.ScheduledTasks
             CancellationToken cancellationToken)
         {
             var existingCache = cacheStore.Read(node.Id);
+            var priorByStableId = existingCache.Items
+                .Where(i => !string.IsNullOrEmpty(i.StableId))
+                .GroupBy(i => i.StableId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
             var mergedItems = new List<CachedChannelItem>();
             bool anyAttempted = false, anySucceeded = false;
 
@@ -208,35 +215,52 @@ namespace SyncChannel.ScheduledTasks
                 // per-fetch key needed to carry forward this specific
                 // fetch's contribution on a future partial failure (a
                 // folder can have multiple fetches against the same schema).
-                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, schema.ObjectKind)));
+                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, schema.ObjectKind, priorByStableId)));
             }
 
             if (anyAttempted)
             {
-                cacheStore.Write(node.Id, new FolderCache
+                var newCache = new FolderCache
                 {
                     Items = mergedItems,
                     LastSyncSucceeded = anySucceeded,
                     LastSyncUtc = DateTimeOffset.UtcNow,
-                    StubVideoPath = existingCache.StubVideoPath
-                });
+                    StubVideoPath = existingCache.StubVideoPath,
+                    LastCollageStableIds = existingCache.LastCollageStableIds
+                };
+
+                cacheStore.Write(node.Id, newCache);
 
                 logger.Info("ChannelSync: Folder '{0}' synced — {1} item(s).", node.DisplayName, mergedItems.Count);
+
+                await collageBuilder.BuildIfNeeded(node, newCache, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        private static CachedChannelItem ToCache(FetchedItem item, string fetchInstanceId, ChannelObjectKind kind) => new CachedChannelItem
+        private static CachedChannelItem ToCache(
+            FetchedItem item,
+            string fetchInstanceId,
+            ChannelObjectKind kind,
+            IReadOnlyDictionary<string, CachedChannelItem> priorByStableId)
         {
-            ProviderKey = fetchInstanceId,
-            StableId = item.StableId,
-            ObjectKind = kind,
-            Title = item.Title,
-            OriginalTitle = item.OriginalTitle,
-            Year = item.Year,
-            Overview = item.Overview,
-            PosterUrl = item.PosterUrl,
-            ProviderIds = item.ProviderIds
-        };
+            var firstSeenUtc = priorByStableId.TryGetValue(item.StableId, out var prior)
+                ? prior.FirstSeenUtc
+                : DateTimeOffset.UtcNow;
+
+            return new CachedChannelItem
+            {
+                ProviderKey = fetchInstanceId,
+                StableId = item.StableId,
+                ObjectKind = kind,
+                FirstSeenUtc = firstSeenUtc,
+                Title = item.Title,
+                OriginalTitle = item.OriginalTitle,
+                Year = item.Year,
+                Overview = item.Overview,
+                PosterUrl = item.PosterUrl,
+                ProviderIds = item.ProviderIds
+            };
+        }
 
         private async Task TriggerRefreshInternetChannels()
         {
