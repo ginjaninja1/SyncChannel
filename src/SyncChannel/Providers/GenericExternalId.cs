@@ -20,6 +20,7 @@ namespace SyncChannel.Providers
         // format string is just a pass-through.
         public string UrlFormatString => "{0}";
 
-        public bool Supports(IHasProviderIds item) => true;
+        public bool Supports(IHasProviderIds item) =>
+            item.ProviderIds.ContainsKey("SourceUrl");
     }
 }

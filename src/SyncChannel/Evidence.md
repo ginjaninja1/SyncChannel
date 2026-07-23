@@ -471,3 +471,27 @@ When a class is referenced but you don't know which DLL it's in, load the likely
 Decompiling the actual internal manager class (not just the public interface) is often what resolves the real open questions — the interface tells you the shape, the implementation tells you the behavior.
 
 Conclusion: Emby has no inbuilt path that will generate a composite poster for a channel subfolder. There's nothing to "hint" — the built-in collage mechanism is structurally unreachable for this item type. If you want subfolder thumbnails, you'll need to build your own — the same pattern already used in ChannelIdentityReconciler.ReapplyChannelImage (extract/generate an image file, call item.SetImage(...) + libraryManager.UpdateImages(item)), but computing it yourself (e.g. picking 1–4 child item poster URLs, downloading/compositing them with IImageProcessor, and writing the result once per folder, refreshed on sync).
+
+
+## IExternalId — value/link are one string, not two
+
+Confirmed via ILSpy decompilation of Emby.Providers.Manager.ProviderManager
+(GetExternalUrls / GetExternalIdInfos): the single string stored under
+item.ProviderIds[Key] is used BOTH as the literal text shown in the
+metadata-editor UI box AND as the input substituted into UrlFormatString to
+build the clickable link. There is no separate display-value vs link-value
+concept — one stored string does both jobs.
+
+UrlFormatString is a static property on the IExternalId class (evaluated
+per-render, so it CAN read live config — confirmed safe), but it has no
+per-item context. If a plugin supports multiple named connections to
+different base URLs of the same system type, a single IExternalId class
+cannot correctly link items from more than one of those connections — it
+can only ever be correct for one (e.g. "whichever connection was created
+first"), since the format string can't vary per item. Storing the full
+resolved URL as the value sidesteps this (correct per-item, ugly display);
+storing a short id and hardcoding/live-resolving UrlFormatString gives a
+clean display but is only correct for a single connection per system type.
+Choose deliberately per product requirements — there is no way to get both
+a clean short value and a correct link across multiple connections with a
+single IExternalId class.
