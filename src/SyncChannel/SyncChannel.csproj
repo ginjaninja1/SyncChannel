@@ -9,6 +9,8 @@
 	<ItemGroup>
 		<Compile Remove="Channels\RadarrComingSoonChannel.cs" />
 		<Compile Remove="Configuration\ConfigurationPageView - Copy.cs" />
+		<Compile Remove="Configuration\ConfigurationPageView.cs" />
+		<Compile Remove="Configuration\ConfigurationUI.cs" />
 		<Compile Remove="Models\RadarrChannelCache.cs" />
 		<Compile Remove="Models\RadarrMovie.cs" />
 		<Compile Remove="Rules\RadarrFieldAccessors.cs" />
@@ -16,6 +18,7 @@
 		<Compile Remove="ScheduledTasks\RadarrDiagnosticsTask.cs" />
 		<Compile Remove="Services\RadarrClient.cs" />
 		<Compile Remove="UIBaseClasses\UIBaseClasses.cs" />
+		<Compile Remove="UI\MainPageController.cs" />
 	</ItemGroup>
 	<ItemGroup>
 		<None Remove="ComingSoonChannel.png" />
@@ -26,8 +29,6 @@
 		<None Remove="Rules\WebUI\rulesPage.js" />
 		<None Remove="thumb.png" />
 		<None Remove="comingsoon.mp4" />
-		<None Remove="Rules\WebUI\manageComingSoonPage.html" />
-		<None Remove="Rules\WebUI\manageComingSoonPage.js" />
 	</ItemGroup>
 	<!--
     Point $(EmbyServerPath) at your Emby Server installation's system/ folder.
@@ -38,13 +39,16 @@
 		<EmbeddedResource Include="ComingSoonChannel2.png" />
 		<EmbeddedResource Include="thumb.png" Condition="Exists('thumb.png')" />
 		<EmbeddedResource Include="comingsoon.mp4" Condition="Exists('comingsoon.mp4')" />
-		<EmbeddedResource Include="Rules\WebUI\manageComingSoonPage.html" />
-		<EmbeddedResource Include="Rules\WebUI\manageComingSoonPage.js" />
+		<EmbeddedResource Include="Rules\WebUI\SyncChannel.html" />
+		<EmbeddedResource Include="Rules\WebUI\SyncChannel.js" />
 	</ItemGroup>
 	<ItemGroup>
 		<PackageReference Include="MediaBrowser.Server.Core" Version="4.9.1.90" />
 		<PackageReference Include="System.Memory" Version="4.6.3" />
 		<PackageReference Include="System.Text.Json" Version="8.0.5" />
+	</ItemGroup>
+	<ItemGroup>
+	  <Folder Include="UI\" />
 	</ItemGroup>
 	<!-- Optional: auto-copy the DLL to your plugins folder after build.
 	     Uncomment and set your own destination path. -->

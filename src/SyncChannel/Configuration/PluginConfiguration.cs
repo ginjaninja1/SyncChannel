@@ -9,14 +9,14 @@ namespace SyncChannel.Configuration
         // old one — ChannelIdentityTag below is what lets the reconciler
         // find and clean up that orphan. See Evidence.md's "Channel
         // Persistence and Database Identity" section.
-        public string ChannelName { get; set; } = "Sync Channel";
+        public string ChannelName { get; set; } = "Channel Sync";
 
         // Fixed identity marker applied to the Channel BaseItem, independent
         // of ChannelName. Survives a rename, letting the sync task find
         // "this plugin's channel" even after the Name-keyed DB row changes —
         // and flag any other Channel item carrying this tag as a stale
         // orphan.
-        public string ChannelIdentityTag { get; set; } = "ChannelSync:SyncChannel";
+        public string ChannelIdentityTag { get; set; } = "SyncChannel";
 
         // Internal bookkeeping — the identity tag value most recently
         // written to the Channel BaseItem. Not user-facing. Lets the

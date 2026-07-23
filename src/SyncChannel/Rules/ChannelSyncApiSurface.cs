@@ -74,6 +74,7 @@
         private readonly HttpFetchProvider fetchProvider;
         private readonly LastResponseCacheStore lastResponseStore;
         private readonly FolderTreeSyncTask syncTask;
+        private readonly Services.ChannelIdentityReconciler reconciler;
         private readonly ILogger logger;
 
         public ChannelSyncApiSurface(
@@ -84,6 +85,7 @@
             HttpFetchProvider fetchProvider,
             LastResponseCacheStore lastResponseStore,
             FolderTreeSyncTask syncTask,
+            Services.ChannelIdentityReconciler reconciler,
             ILogger logger)
         {
             this.connectionsStore = connectionsStore;
@@ -93,6 +95,7 @@
             this.fetchProvider = fetchProvider;
             this.lastResponseStore = lastResponseStore;
             this.syncTask = syncTask;
+            this.reconciler = reconciler;
             this.logger = logger;
         }
 
@@ -233,12 +236,55 @@
                 return new { Success = false, Errors = errors };
             }
 
+            ApplyRootIdentity(r.RootFolder);
+
             treeStore.Save(new FolderTreeFile { RootFolder = r.RootFolder });
 
             logger.Info("ChannelSync: Folder tree saved — running a full sync now.");
             _ = syncTask.Execute(CancellationToken.None, new Progress<double>());
 
             return new { Success = true };
+        }
+
+        /// <summary>
+        /// The root folder's DisplayName/Tag are now the single source of
+        /// truth for the channel's display name and identity tag — the old
+        /// dedicated Config UI fields are gone (moved here per operator
+        /// request). Detects a change against the currently persisted
+        /// PluginConfiguration, cleans up any orphan still carrying the OLD
+        /// tag before it's overwritten, and saves the new values. The
+        /// subsequent sync's own reconciler.Reconcile(config) call (see
+        /// FolderTreeSyncTask.Execute) applies the new tag/name/image.
+        /// </summary>
+        private void ApplyRootIdentity(FolderNode root)
+        {
+            var plugin = SyncChannelPlugin.Instance;
+            var cfg = plugin.Configuration;
+
+            string newName = string.IsNullOrWhiteSpace(root.DisplayName) ? "Channel Sync" : root.DisplayName.Trim();
+            string newTag = string.IsNullOrWhiteSpace(root.Tag) ? "SyncChannel" : root.Tag.Trim();
+
+            root.DisplayName = newName;
+            root.Tag = newTag;
+
+            bool nameChanged = !string.Equals(cfg.ChannelName, newName, StringComparison.OrdinalIgnoreCase);
+            bool tagChanged = !string.Equals(cfg.ChannelIdentityTag, newTag, StringComparison.OrdinalIgnoreCase);
+
+            if (!nameChanged && !tagChanged)
+            {
+                return;
+            }
+
+            string oldTag = cfg.ChannelIdentityTagLastApplied;
+
+            cfg.ChannelName = newName;
+            cfg.ChannelIdentityTag = newTag;
+            plugin.UpdateConfiguration(cfg);
+
+            if (tagChanged && !string.IsNullOrEmpty(oldTag))
+            {
+                reconciler.CleanupOrphansForTag(cfg, oldTag);
+            }
         }
 
         /// <summary>

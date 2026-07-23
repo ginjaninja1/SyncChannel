@@ -4,7 +4,7 @@
 
     public enum RuleNodeKind { Group, Condition }
     public enum RuleLogicOperator { And, Or }
-    public enum RuleOperator { LT, LTE, GT, GTE, EQ, NEQ, CONTAINS, NOTCONTAINS }
+    public enum RuleOperator { LT, LTE, GT, GTE, EQ, NEQ, CONTAINS, NOTCONTAINS, STARTSWITH, ENDSWITH }
 
     public class RuleNode
     {

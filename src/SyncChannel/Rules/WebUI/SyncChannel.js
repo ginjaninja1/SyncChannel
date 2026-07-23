@@ -10,11 +10,11 @@
     var OPERATORS_BY_TYPE = {
         Bool:   ['EQ'],
         Number: ['LT', 'LTE', 'GT', 'GTE', 'EQ', 'NEQ'],
-        String: ['EQ', 'NEQ', 'CONTAINS', 'NOTCONTAINS'],
+        String: ['EQ', 'NEQ', 'CONTAINS', 'NOTCONTAINS', 'STARTSWITH', 'ENDSWITH'],
         List:   ['CONTAINS', 'NOTCONTAINS']
     };
 
-    var ALL_OPERATORS = ['EQ', 'NEQ', 'LT', 'LTE', 'GT', 'GTE', 'CONTAINS', 'NOTCONTAINS'];
+    var ALL_OPERATORS = ['EQ', 'NEQ', 'LT', 'LTE', 'GT', 'GTE', 'CONTAINS', 'NOTCONTAINS', 'STARTSWITH', 'ENDSWITH'];
 
     function operatorAllowedForField(fieldType, operator) {
         var allowed = OPERATORS_BY_TYPE[fieldType];
@@ -1341,13 +1341,32 @@
 
         var nameInput = document.createElement('input');
         nameInput.className = 'ftNodeName';
-        nameInput.value = node.IsRoot ? '(root)' : node.DisplayName;
-        nameInput.disabled = node.IsRoot;
+        nameInput.value = node.DisplayName;
         nameInput.addEventListener('change', function () {
-            node.DisplayName = nameInput.value.trim() || 'Untitled Folder';
+            node.DisplayName = nameInput.value.trim() || (node.IsRoot ? 'Channel Sync' : 'Untitled Folder');
             nameInput.value = node.DisplayName;
         });
         header.appendChild(nameInput);
+
+        if (node.IsRoot) {
+            var tagLabel = document.createElement('span');
+            tagLabel.style.fontSize = '0.85em';
+            tagLabel.style.opacity = '0.7';
+            tagLabel.style.marginLeft = '0.6em';
+            tagLabel.innerText = 'Tag:';
+            header.appendChild(tagLabel);
+
+            var tagInput = document.createElement('input');
+            tagInput.className = 'ftNodeName';
+            tagInput.style.minWidth = '9em';
+            tagInput.title = 'Internal identity tag — used to find this channel across renames and detect orphaned entries.';
+            tagInput.value = node.Tag || 'SyncChannel';
+            tagInput.addEventListener('change', function () {
+                node.Tag = tagInput.value.trim() || 'SyncChannel';
+                tagInput.value = node.Tag;
+            });
+            header.appendChild(tagInput);
+        }
 
         if (!node.IsRoot) {
             var imageUpdateLabel = document.createElement('label');

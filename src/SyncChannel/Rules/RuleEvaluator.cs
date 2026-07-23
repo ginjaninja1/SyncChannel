@@ -129,6 +129,8 @@
                         case RuleOperator.NEQ: return !string.Equals(actualStr, expected, StringComparison.OrdinalIgnoreCase);
                         case RuleOperator.CONTAINS: return actualStr.IndexOf(expected ?? string.Empty, StringComparison.OrdinalIgnoreCase) >= 0;
                         case RuleOperator.NOTCONTAINS: return actualStr.IndexOf(expected ?? string.Empty, StringComparison.OrdinalIgnoreCase) < 0;
+                        case RuleOperator.STARTSWITH: return actualStr.StartsWith(expected ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+                        case RuleOperator.ENDSWITH: return actualStr.EndsWith(expected ?? string.Empty, StringComparison.OrdinalIgnoreCase);
                         default: return false;
                     }
 

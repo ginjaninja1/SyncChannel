@@ -19,6 +19,11 @@ namespace SyncChannel.Configuration
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
         public string DisplayName { get; set; } = string.Empty;
         public bool IsRoot { get; set; }
+
+        // Only meaningful when IsRoot — the channel's identity tag, edited
+        // here instead of a separate Config UI page (see ChannelSyncApiSurface.
+        // ApplyRootIdentity). Ignored for non-root nodes.
+        public string Tag { get; set; } = "SyncChannel";
         public List<FetchRuleInstance> Fetches { get; set; } = new List<FetchRuleInstance>();
         public List<FolderNode> Children { get; set; } = new List<FolderNode>();
 
@@ -48,6 +53,6 @@ namespace SyncChannel.Configuration
 
     public class FolderTreeFile
     {
-        public FolderNode RootFolder { get; set; } = new FolderNode { IsRoot = true, DisplayName = "root" };
+        public FolderNode RootFolder { get; set; } = new FolderNode { IsRoot = true, DisplayName = "Channel Sync" };
     }
 }
