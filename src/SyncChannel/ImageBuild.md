@@ -1,4 +1,6 @@
-﻿Design: Auto-generated collage thumbnails for Channel Sync folder-tree subfolders
+﻿version 2.1
+
+Design: Auto-generated collage thumbnails for Channel Sync folder-tree subfolders
 Background / why this is needed
 Confirmed via ILSpy investigation (this session) that Emby's built-in folder-collage generation (CollectionFolderImageProvider : BaseCollageImageProvider) is gated by:
 csharppublic override bool Supports(BaseItem item)
