@@ -463,35 +463,35 @@ Folder items need both Type = ChannelItemType.Folder and FolderType (a separate 
 Recursive refresh depth is a real, configurable int (maxRefreshLevel, default 8) — Emby walks the tree calling GetChannelItems once per folder node. Reconciliation (add/remove) is scoped per-parent-folder, not global — a folder's own returned list only ever affects that folder's children.
 Server already caches IRequiresMediaInfoCallback.GetChannelItemMediaInfo results for 5 minutes — don't assume you need to build that caching yourself.
 
-Decompilation workflow (ILSpy)
+## IHttpClient (CoreHttpClientManager) — automatic-timeout cooldown is keyed by host:port, not full URL
 
-Ctrl+T = fuzzy type search across all loaded assemblies — the single most useful action once you know a symbol name.
-Right-click → Analyze = find every caller/usage of a member — this is how you trace "what actually calls my interface method and with what."
-When a class is referenced but you don't know which DLL it's in, load the likely candidates from Emby's system/ folder first (MediaBrowser.Controller.dll, MediaBrowser.Model.dll, the server implementation assembly) — Ctrl+T searches everything currently open at once.
-Decompiling the actual internal manager class (not just the public interface) is often what resolves the real open questions — the interface tells you the shape, the implementation tells you the behavior.
+Confirmed via ILSpy decompilation of Emby.Server.Implementations.HttpClientManager.CoreHttpClientManager
+and its base BaseHttpClientManager.
 
-Conclusion: Emby has no inbuilt path that will generate a composite poster for a channel subfolder. There's nothing to "hint" — the built-in collage mechanism is structurally unreachable for this item type. If you want subfolder thumbnails, you'll need to build your own — the same pattern already used in ChannelIdentityReconciler.ReapplyChannelImage (extract/generate an image file, call item.SetImage(...) + libraryManager.UpdateImages(item)), but computing it yourself (e.g. picking 1–4 child item poster URLs, downloading/compositing them with IImageProcessor, and writing the result once per folder, refreshed on sync).
+`GetConnectionContextInternal` builds its per-connection cache key from
+`BaseHttpClientManager.GetHostFromUrl(url)` (host:port only — scheme,
+path, and query are stripped) plus compression/userinfo/timeout settings.
+This means requests to the same host:port on different schemes (http vs
+https) or different paths share the same cached `HttpClientInfo`,
+including its `LastTimeout` field.
 
+`SendAsyncInternal` checks, before attempting any request:
+```csharp
+if (options.EnableAutomaticTimeouts && (DateTimeOffset.UtcNow - client.LastTimeout).TotalSeconds < 30.0)
+    throw new HttpException("Cancelling connection ... due to a previous timeout.") { IsTimedOut = true };
+```
+Any failure (including an unrelated one, e.g. wrong scheme) re-stamps
+`LastTimeout`. Any other request to the same host:port within the next 30
+seconds is rejected immediately, with no real network attempt — even if
+it would have succeeded, and even if it's a different endpoint on that
+host.
 
-## IExternalId — value/link are one string, not two
+Practical implication: any "test connection" / probe-style call that a
+user might reasonably retry quickly after a failure should set
+`HttpRequestOptions.EnableAutomaticTimeouts = false` explicitly, so a
+manual retry always gets a genuine attempt. Confirmed precedent for this
+exact pattern already exists in Emby's own code
+(`SharedHttpPipelineSource.FindMediaFromHlsVariantPlaylist`). Leave the
+default (`true`) for steady-state background/scheduled fetches, where
+automatic backoff against a genuinely unreachable host is desirable.
 
-Confirmed via ILSpy decompilation of Emby.Providers.Manager.ProviderManager
-(GetExternalUrls / GetExternalIdInfos): the single string stored under
-item.ProviderIds[Key] is used BOTH as the literal text shown in the
-metadata-editor UI box AND as the input substituted into UrlFormatString to
-build the clickable link. There is no separate display-value vs link-value
-concept — one stored string does both jobs.
-
-UrlFormatString is a static property on the IExternalId class (evaluated
-per-render, so it CAN read live config — confirmed safe), but it has no
-per-item context. If a plugin supports multiple named connections to
-different base URLs of the same system type, a single IExternalId class
-cannot correctly link items from more than one of those connections — it
-can only ever be correct for one (e.g. "whichever connection was created
-first"), since the format string can't vary per item. Storing the full
-resolved URL as the value sidesteps this (correct per-item, ugly display);
-storing a short id and hardcoding/live-resolving UrlFormatString gives a
-clean display but is only correct for a single connection per system type.
-Choose deliberately per product requirements — there is no way to get both
-a clean short value and a correct link across multiple connections with a
-single IExternalId class.

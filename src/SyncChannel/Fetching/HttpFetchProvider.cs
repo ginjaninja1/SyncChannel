@@ -240,7 +240,15 @@ namespace SyncChannel.Fetching
             {
                 Url = url,
                 CancellationToken = cancellationToken,
-                TimeoutMs = 4000
+                TimeoutMs = 4000,
+                // A manual "Test" click must always make a real attempt.
+                // CoreHttpClientManager's automatic-timeout cooldown is
+                // keyed by host:port only (GetHostFromUrl strips scheme),
+                // so a prior failed test against the same host on a
+                // different scheme (e.g. https vs http) would otherwise
+                // silently short-circuit this call for up to 30s without
+                // any network attempt — see Evidence.md.
+                EnableAutomaticTimeouts = false
             };
             options.RequestHeaders["X-Api-Key"] = connection.ApiKey;
 

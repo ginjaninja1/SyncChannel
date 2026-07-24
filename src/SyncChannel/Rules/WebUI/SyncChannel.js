@@ -1637,7 +1637,9 @@
             // well as after, and persists LastTestSucceeded/LastTestedUtc
             // onto the connection if it already exists on disk.
             testBtn.addEventListener('click', function () {
-                testStatus.innerText = 'Testing…';
+    if (testBtn.dataset.busy === 'true') return;
+    testBtn.dataset.busy = 'true';
+    testStatus.innerText = 'Testing…';
 
                 var matching = schemasForSystemType(c.SystemType);
                 var schemaId = matching.length ? matching[0].Id : (schemas.length ? schemas[0].Id : '');
@@ -1660,11 +1662,13 @@
                     contentType: 'application/json',
                     dataType: 'json'
                 }).then(function (result) {
+                    testBtn.dataset.busy = 'false';
                     testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
                     c.LastTestSucceeded = result.Success;
                     c.LastTestedUtc = new Date().toISOString();
                     connBadge.innerText = connectionBadgeText(c);
                 }).catch(function () {
+                    testBtn.dataset.busy = 'false';
                     testStatus.innerText = '❌ Test request failed.';
                 });
             });
