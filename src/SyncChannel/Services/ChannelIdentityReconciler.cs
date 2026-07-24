@@ -22,7 +22,8 @@
     /// </summary>
     public class ChannelIdentityReconciler
     {
-        private const string ThumbResourceName = "SyncChannel.thumb.png";
+        //control image file name, relative to the plugin's root folder, wipe data path to switch
+        private const string ThumbResourceName = "SyncChannel.ComingSoonChannel2.png";
         private const string ThumbCacheFileName = "channel-thumb.png";
 
         private readonly IChannelManager channelManager;
