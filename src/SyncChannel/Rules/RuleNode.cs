@@ -27,6 +27,13 @@
         // discouraged in the UI.
         public string EndpointSchemaId { get; set; } = string.Empty;
 
+        // Marks a shipped-with-the-plugin default. Re-seeded/overwritten on
+        // every RuleSetStore.Load() (see ReplaceBuiltIn) and stripped from
+        // any client save (see ChannelSyncApiSurface.Post(SaveRuleSets)) —
+        // same read-only discipline as EndpointSchema.IsBuiltIn. Users
+        // duplicate it to get an editable copy rather than editing in place.
+        public bool IsBuiltIn { get; set; }
+
         public RuleNode Root { get; set; } = new RuleNode { Kind = RuleNodeKind.Group };
     }
 

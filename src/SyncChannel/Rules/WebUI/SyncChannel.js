@@ -234,7 +234,7 @@
     // ===================================================================
     var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey, SystemType, LastTestSucceeded, LastTestedUtc }]
     var schemas = [];               // [{ Id, DisplayName, SystemType, Fields: [{Key/JsonPath, DisplayName, Type}] }]
-    var ruleSetsFile = null;        // { RuleSets: [{ Id, Name, EndpointSchemaId, Root }] }
+    var ruleSetsFile = null;        // { RuleSets: [{ Id, Name, EndpointSchemaId, IsBuiltIn, Root }] }
     var currentRuleSetIndex = -1;   // index into ruleSetsFile.RuleSets bound to the canvas
 
     // ---- SystemType filtering helpers ----
@@ -840,6 +840,7 @@
         if (currentRuleSetIndex < 0) return;
         var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
         if (!current) return;
+        if (current.IsBuiltIn) return; // read-only — never overwrite from the DOM
         var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
         if (!rootGroupEl) return;
         current.Root = readGroupFromDom(rootGroupEl);
@@ -854,7 +855,7 @@
         matching.forEach(function (x) {
             var opt = document.createElement('option');
             opt.value = String(x.idx);
-            opt.innerText = x.rs.Name || '(unnamed)';
+            opt.innerText = (x.rs.Name || '(unnamed)') + (x.rs.IsBuiltIn ? ' 🔒' : '');
             if (x.idx === currentRuleSetIndex) opt.selected = true;
             select.appendChild(opt);
         });
@@ -882,8 +883,17 @@
             return;
         }
 
-        var onChange = function () { scheduleAutoPreview(view); };
         var ruleSet = ruleSetsFile.RuleSets[currentRuleSetIndex];
+
+        if (ruleSet.IsBuiltIn) {
+            var lockNotice = document.createElement('div');
+            lockNotice.className = 'fieldDescription';
+            lockNotice.style.marginBottom = '0.8em';
+            lockNotice.innerText = '🔒 This is a built-in rule set and is read-only. Use Duplicate above to make an editable copy.';
+            list.appendChild(lockNotice);
+        }
+
+        var onChange = function () { scheduleAutoPreview(view); };
         list.appendChild(buildGroupNode(ruleSet.Root || emptyRoot(), true, onChange));
 
         scheduleAutoPreview(view);
@@ -1003,7 +1013,7 @@
             var schemaId = view.querySelector('#rcsSchemaSelect').value;
             var name = prompt('Name for the new rule set:', 'New Rule Set');
             if (!name) return;
-            ruleSetsFile.RuleSets.push({ Id: newId(), Name: name.trim(), EndpointSchemaId: schemaId, Root: emptyRoot() });
+            ruleSetsFile.RuleSets.push({ Id: newId(), Name: name.trim(), EndpointSchemaId: schemaId, IsBuiltIn: false, Root: emptyRoot() });
             switchRuleSetTo(view, ruleSetsFile.RuleSets.length - 1);
         });
 
@@ -1011,11 +1021,13 @@
             captureCurrentEditsIntoFile(view);
             var source = ruleSetsFile.RuleSets[currentRuleSetIndex];
             if (currentRuleSetIndex < 0 || !source) { Dashboard.alert('No rule set selected to duplicate.'); return; }
-            var name = prompt('Name for the duplicated rule set:', source.Name + ' copy');
+            var defaultName = (source.Name || '').replace(/^\[Built-in\]\s*/, '') + ' copy';
+            var name = prompt('Name for the duplicated rule set:', defaultName);
             if (!name) return;
             var clone = JSON.parse(JSON.stringify(source));
             clone.Id = newId();
             clone.Name = name.trim();
+            clone.IsBuiltIn = false;
             ruleSetsFile.RuleSets.push(clone);
             switchRuleSetTo(view, ruleSetsFile.RuleSets.length - 1);
         });
@@ -1023,6 +1035,7 @@
         view.querySelector('#rcsRenameRuleSet').addEventListener('click', function () {
             var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
             if (currentRuleSetIndex < 0 || !current) { Dashboard.alert('No rule set selected to rename.'); return; }
+            if (current.IsBuiltIn) { Dashboard.alert('Built-in rule sets are read-only. Use Duplicate to make an editable copy.'); return; }
             var name = prompt('Rename rule set:', current.Name);
             if (!name) return;
             current.Name = name.trim();
@@ -1035,6 +1048,7 @@
                 Dashboard.alert('No rule set selected to delete.');
                 return;
             }
+            if (current.IsBuiltIn) { Dashboard.alert('Built-in rule sets are read-only and cannot be deleted.'); return; }
             if (!confirm('Delete rule set "' + current.Name + '"? Any folder-tree fetch still referencing it will be blocked from saving until reassigned.')) {
                 return;
             }
@@ -1143,7 +1157,7 @@
                 matching.forEach(function (rs) {
                     var opt = document.createElement('option');
                     opt.value = rs.Id;
-                    opt.innerText = rs.Name;
+                    opt.innerText = rs.Name + (rs.IsBuiltIn ? ' 🔒' : '');
                     if (rs.Id === currentVal) opt.selected = true;
                     ruleSetSelect.appendChild(opt);
                 });

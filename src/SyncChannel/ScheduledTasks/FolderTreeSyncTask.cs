@@ -61,7 +61,7 @@ namespace SyncChannel.ScheduledTasks
             this.logger = logger;
         }
 
-        public string Name => "Sync Coming Soon Folder Tree";
+        public string Name => "Sync Channel Refresh Folder Tree";
         public string Key => "ChannelSync-FolderTreeSync";
         public string Description =>
             "Runs every configured fetch for every folder in the admin-defined folder tree, updates each folder's cache, and persists the results into Emby. Change the schedule here, in Scheduled Tasks — there is no separate interval setting in plugin config.";

@@ -170,6 +170,13 @@
         public object Post(SaveRuleSets r)
         {
             var before = ruleSetStore.Load().RuleSets.ToDictionary(rs => rs.Id, rs => rs);
+
+            // Built-ins are never overwritten by a client save — same
+            // discipline as SaveEndpointSchemas. Re-seeded/refreshed by
+            // RuleSetStore.Load() on next read regardless.
+            r.Payload.RuleSets.RemoveAll(rs => rs.IsBuiltIn);
+            r.Payload.RuleSets.AddRange(before.Values.Where(rs => rs.IsBuiltIn));
+
             ruleSetStore.Save(r.Payload);
 
             // Responsive save: find which saved rule sets actually changed
