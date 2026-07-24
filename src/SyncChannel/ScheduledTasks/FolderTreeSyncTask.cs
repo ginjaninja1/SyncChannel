@@ -65,13 +65,10 @@ namespace SyncChannel.ScheduledTasks
         public string Key => "ChannelSync-FolderTreeSync";
         public string Description =>
             "Runs every configured fetch for every folder in the admin-defined folder tree, updates each folder's cache, and persists the results into Emby. Change the schedule here, in Scheduled Tasks — there is no separate interval setting in plugin config.";
-        public string Category => "Channel Sync";
+        public string Category => "GinjaNinja Tools";
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
-            // Default only — the user can change this from Emby's own
-            // Scheduled Tasks page, and that edit is Emby's to persist, not
-            // ours. No plugin-config interval field to keep in sync anymore.
             yield return new TaskTriggerInfo
             {
                 Type = TaskTriggerInfo.TriggerInterval,
@@ -87,7 +84,12 @@ namespace SyncChannel.ScheduledTasks
             var ruleSets = ruleSetStore.Load().RuleSets.ToDictionary(r => r.Id, r => r, StringComparer.OrdinalIgnoreCase);
 
             var allFolderIds = new List<string>();
-            await SyncNode(tree.RootFolder, connections, schemas, ruleSets, allFolderIds, cancellationToken).ConfigureAwait(false);
+            // Collects every node that actually had a fetch attempted this
+            // pass, so collage building can happen AFTER the BaseItems for
+            // any brand-new folders exist (see SyncedNodes comment below).
+            var syncedNodes = new List<(FolderNode Node, FolderCache Cache)>();
+
+            await SyncNode(tree.RootFolder, connections, schemas, ruleSets, allFolderIds, syncedNodes, cancellationToken).ConfigureAwait(false);
 
             cacheStore.DeleteOrphans(allFolderIds);
             progress.Report(50);
@@ -112,6 +114,16 @@ namespace SyncChannel.ScheduledTasks
             await TriggerRefreshInternetChannels().ConfigureAwait(false);
             progress.Report(100);
             reconciler.Reconcile(SyncChannelPlugin.Instance.Configuration);
+
+            // Collage building deliberately runs LAST, after
+            // RefreshChannelContent + "Refresh Internet Channels" have had a
+            // chance to persist BaseItems for any folder synced for the very
+            // first time this pass. Doing this earlier (immediately after
+            // each folder's cache write) meant a brand-new subfolder's
+            // ExternalId lookup always missed on its first sync — the
+            // collage would only appear on the NEXT scheduled run once the
+            // BaseItem already existed from the prior pass's refresh.
+            await BuildCollagesFor(syncedNodes, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -128,12 +140,18 @@ namespace SyncChannel.ScheduledTasks
             var schemas = schemaStore.Load().Schemas.ToDictionary(s => s.Id, s => s, StringComparer.OrdinalIgnoreCase);
             var ruleSets = ruleSetStore.Load().RuleSets.ToDictionary(r => r.Id, r => r, StringComparer.OrdinalIgnoreCase);
 
+            var syncedNodes = new List<(FolderNode Node, FolderCache Cache)>();
+
             foreach (var folderId in folderIds)
             {
                 var node = FolderTreeStore.FindNode(tree.RootFolder, folderId);
                 if (node != null)
                 {
-                    await SyncSingleNode(node, connections, schemas, ruleSets, cancellationToken).ConfigureAwait(false);
+                    var cache = await SyncSingleNode(node, connections, schemas, ruleSets, cancellationToken).ConfigureAwait(false);
+                    if (cache != null)
+                    {
+                        syncedNodes.Add((node, cache));
+                    }
                 }
             }
 
@@ -145,6 +163,17 @@ namespace SyncChannel.ScheduledTasks
             }
 
             await TriggerRefreshInternetChannels().ConfigureAwait(false);
+
+            // Same ordering fix as the main Execute() path — see comment there.
+            await BuildCollagesFor(syncedNodes, cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task BuildCollagesFor(List<(FolderNode Node, FolderCache Cache)> syncedNodes, CancellationToken cancellationToken)
+        {
+            foreach (var (node, cache) in syncedNodes)
+            {
+                await collageBuilder.BuildIfNeeded(node, cache, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         private async Task SyncNode(
@@ -153,18 +182,31 @@ namespace SyncChannel.ScheduledTasks
             Dictionary<string, EndpointSchema> schemas,
             Dictionary<string, RuleSet> ruleSets,
             List<string> allFolderIds,
+            List<(FolderNode Node, FolderCache Cache)> syncedNodes,
             CancellationToken cancellationToken)
         {
             allFolderIds.Add(node.Id);
-            await SyncSingleNode(node, connections, schemas, ruleSets, cancellationToken).ConfigureAwait(false);
+
+            var cache = await SyncSingleNode(node, connections, schemas, ruleSets, cancellationToken).ConfigureAwait(false);
+            if (cache != null)
+            {
+                syncedNodes.Add((node, cache));
+            }
 
             foreach (var child in node.Children)
             {
-                await SyncNode(child, connections, schemas, ruleSets, allFolderIds, cancellationToken).ConfigureAwait(false);
+                await SyncNode(child, connections, schemas, ruleSets, allFolderIds, syncedNodes, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        private async Task SyncSingleNode(
+        /// <summary>
+        /// Fetches + writes this node's cache. Returns the new FolderCache if
+        /// a fetch was actually attempted (anyAttempted), so the caller can
+        /// decide when to build the folder's collage — NOT called from here
+        /// anymore, since the folder's BaseItem may not exist yet on a
+        /// first-ever sync. Returns null if nothing was attempted.
+        /// </summary>
+        private async Task<FolderCache> SyncSingleNode(
             FolderNode node,
             Dictionary<string, ConnectionEntry> connections,
             Dictionary<string, EndpointSchema> schemas,
@@ -195,7 +237,6 @@ namespace SyncChannel.ScheduledTasks
 
                 if (rawJson == null)
                 {
-                    // Fetch failed — carry forward this fetch's prior contribution.
                     mergedItems.AddRange(existingCache.Items.Where(i => string.Equals(i.ProviderKey, fetch.Id, StringComparison.OrdinalIgnoreCase)));
                     continue;
                 }
@@ -211,30 +252,28 @@ namespace SyncChannel.ScheduledTasks
                 }
 
                 anySucceeded = true;
-                // ProviderKey now stores the FetchRuleInstance.Id — the
-                // per-fetch key needed to carry forward this specific
-                // fetch's contribution on a future partial failure (a
-                // folder can have multiple fetches against the same schema).
                 mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, schema.ObjectKind, priorByStableId)));
             }
 
-            if (anyAttempted)
+            if (!anyAttempted)
             {
-                var newCache = new FolderCache
-                {
-                    Items = mergedItems,
-                    LastSyncSucceeded = anySucceeded,
-                    LastSyncUtc = DateTimeOffset.UtcNow,
-                    StubVideoPath = existingCache.StubVideoPath,
-                    LastCollageStableIds = existingCache.LastCollageStableIds
-                };
-
-                cacheStore.Write(node.Id, newCache);
-
-                logger.Info("ChannelSync: Folder '{0}' synced — {1} item(s).", node.DisplayName, mergedItems.Count);
-
-                await collageBuilder.BuildIfNeeded(node, newCache, cancellationToken).ConfigureAwait(false);
+                return null;
             }
+
+            var newCache = new FolderCache
+            {
+                Items = mergedItems,
+                LastSyncSucceeded = anySucceeded,
+                LastSyncUtc = DateTimeOffset.UtcNow,
+                StubVideoPath = existingCache.StubVideoPath,
+                LastCollageStableIds = existingCache.LastCollageStableIds
+            };
+
+            cacheStore.Write(node.Id, newCache);
+
+            logger.Info("ChannelSync: Folder '{0}' synced — {1} item(s).", node.DisplayName, mergedItems.Count);
+
+            return newCache;
         }
 
         private static CachedChannelItem ToCache(

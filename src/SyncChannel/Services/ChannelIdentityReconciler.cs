@@ -18,9 +18,7 @@
     /// Owns all Channel BaseItem identity bookkeeping for the (single,
     /// name-configurable) Sync Channel — applying the identity tag,
     /// reapplying the channel image, and finding/deleting orphaned Channel
-    /// DB rows left behind by a rename. Generalized from the original
-    /// Radarr-specific reconciler — nothing here is provider-specific,
-    /// since SyncFolderChannel isn't tied to any one provider.
+    /// DB rows left behind by a rename.
     /// </summary>
     public class ChannelIdentityReconciler
     {

@@ -46,7 +46,7 @@
         public string Key => "ChannelSync-ResetContent";
         public string Description =>
             "DEV ONLY: deletes every item currently persisted under the Sync Channel from Emby's library, so the next sync recreates them fresh with correct typing. Does not touch Radarr/Sonarr or plugin config/cache files.";
-        public string Category => "Channel Sync";
+        public string Category => "GinjaNinja Tools";
 
         public IEnumerable<TaskTriggerInfo> GetDefaultTriggers()
         {
