@@ -226,11 +226,8 @@
 				background: rgba(0,0,0,0.2); color: inherit;
 				}
 				#connStatus { font-size: 0.85em; opacity: 0.7; margin-top: 1em; }
+				#rcsSaveStatus { font-size: 0.85em; opacity: 0.7; }
 				.connBadge { font-size: 0.8em; opacity: 0.8; min-width: 9em; }
-				.connStatusWrap {
-				flex-basis: 100%; display: flex; align-items: center; gap: 0.6em;
-				flex-wrap: wrap; margin-top: 0.2em;
-				}
 			</style>
 
 			<div is="emby-tabs" data-index="0" class="tabs-viewmenubar emby-tabs padded-left padded-right focusable scrollX">
@@ -301,8 +298,9 @@
 					<div id="rcsCanvas">
 						<div id="conditionsList"></div>
 
-						<div style="margin-top: 1em; display:flex; gap:0.5em;">
+						<div style="margin-top: 1em; display:flex; gap:0.5em; align-items:center;">
 							<button is="emby-button" type="button" id="btnSave" class="raised button-submit">Save Rule Set</button>
+							<span id="rcsSaveStatus"></span>
 						</div>
 
 						<div id="rcsPreviewSection">

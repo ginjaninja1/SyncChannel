@@ -990,6 +990,9 @@
 
         captureCurrentEditsIntoFile(view);
 
+        var statusEl = view.querySelector('#rcsSaveStatus');
+        statusEl.innerText = 'Saving…';
+
         ApiClient.ajax({
             type: 'POST',
             url: ApiClient.getUrl('ChannelSync/RuleSets'),
@@ -999,16 +1002,17 @@
         }).then(function (result) {
             var affected = (result && result.AffectedFolderCount) || 0;
             if (affected > 0) {
-                Dashboard.alert(
+                statusEl.innerText =
                     'Saved ' + ruleSetsFile.RuleSets.length + ' rule set(s). Re-syncing ' + affected +
-                    ' folder(s) that use a changed rule set now — check the server log for fetch activity.');
+                    ' folder(s) that use a changed rule set now — check the server log for fetch activity.';
             } else {
-                Dashboard.alert(
+                statusEl.innerText =
                     'Saved ' + ruleSetsFile.RuleSets.length + ' rule set(s). Nothing was re-synced: no folder in the ' +
                     'Folder Tree tab currently has a Fetch using this rule set yet, so there is nothing to fetch. ' +
-                    'Add a Fetch on the Folder Tree tab referencing it, then Save Folder Tree, to actually run it.');
+                    'Add a Fetch on the Folder Tree tab referencing it, then Save Folder Tree, to actually run it.';
             }
         }).catch(function () {
+            statusEl.innerText = '';
             Dashboard.alert('Save failed — see server log.');
         });
     }
