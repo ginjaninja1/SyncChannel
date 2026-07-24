@@ -495,3 +495,45 @@ exact pattern already exists in Emby's own code
 default (`true`) for steady-state background/scheduled fetches, where
 automatic backoff against a genuinely unreachable host is desirable.
 
+## Plugin Web-UI Asset Caching (WebAppService.Get(GetDashboardConfigurationPage))
+
+Confirmed via ILSpy decompilation of Emby.Web.Api.WebAppService.
+
+Custom plugin pages registered via `IHasWebPages`/`PluginPageInfo`
+(`.js`/`.css`/`.template.html` embedded resources) are served through
+`_resultFactory.GetStaticResult`, with the cache key computed as:
+
+```csharp
+plugin.Version.ToString().GetMD5()
+```
+
+**Key implication:** the cache key depends only on the plugin assembly's
+own `Version` string — nothing else. Not a content hash, not the file's
+`Last-Modified` time, not a build timestamp. Rebuilding and restarting the
+plugin with an unchanged `<Version>` produces an identical cache key, so
+both the browser and (per the same code path) Emby's own static-result
+cache will keep serving the previously-cached bytes indefinitely. This is
+the mechanism behind "my JS/HTML changes don't show up until I hard-refresh"
+during plugin development — it's expected behavior given how the key is
+built, not a bug or a browser quirk.
+
+**Practical implications for any future Emby plugin with custom web pages:**
+
+- A DevTools "disable cache" + hard-refresh (or an incognito window) always
+  works as a manual workaround, since it bypasses the cache lookup rather
+  than needing to invalidate it.
+- The reliable structural fix is to make the plugin's `Version` change on
+  every build that touches a cached asset, since that's the only input to
+  the key. A manual version bump works but is easy to forget with no
+  obvious symptom when you do. Deriving the version automatically from the
+  build (e.g. a timestamp-based last component via MSBuild) removes the
+  human step entirely, at the cost of the version number no longer being
+  meaningful semver — worth weighing against whether the plugin is
+  personal/in-development versus something distributed where a real
+  version number matters to others.
+- Images/fonts get a separate, much longer-lived cache path
+  (`EnableDashboardResponseCaching` + a `v` query param, or MIME-type-based
+  365-day caching) that isn't tied to plugin version at all — if a plugin's
+  embedded image/font assets ever seem stuck, the fix path is different
+  from the JS/HTML/CSS one described here.
+

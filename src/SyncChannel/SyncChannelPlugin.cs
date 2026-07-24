@@ -52,8 +52,10 @@ namespace SyncChannel
                     Name = "SyncChannelPage",
                     EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.SyncChannel.html",
                     EnableInMainMenu = true,
+                    //EnableInUserMenu = true,
                     DisplayName = "Channel Sync",
-                    MenuIcon = "upcoming"
+                    //MenuIcon = "upcoming"
+                    MenuIcon = "directory_sync"
                 },
                 new PluginPageInfo
                 {

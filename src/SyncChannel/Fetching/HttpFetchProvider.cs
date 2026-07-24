@@ -219,7 +219,53 @@ namespace SyncChannel.Fetching
 
             return null;
         }
+        // Builds a user-facing status message from a failed test, since Emby's
+        // wrapped HTTP exceptions (e.g. SSL failures) often have a useless outer
+        // Message ("...see inner exception.") with the real cause one level down.
+        private static string DescribeFailure(Exception ex)
+        {
+            // Walk to the innermost exception — that's almost always where the
+            // actually-descriptive message lives.
+            var root = ex;
+            while (root.InnerException != null)
+            {
+                root = root.InnerException;
+            }
 
+            if (ex is OperationCanceledException || root is OperationCanceledException)
+            {
+                return "Timed out — no response from the server within the timeout window.";
+            }
+
+            if (root is System.Net.Sockets.SocketException sockEx)
+            {
+                switch (sockEx.SocketErrorCode)
+                {
+                    case System.Net.Sockets.SocketError.ConnectionRefused:
+                        return "Connection refused — nothing is listening on that host/port.";
+                    case System.Net.Sockets.SocketError.HostNotFound:
+                        return "Host not found — check the URL/hostname.";
+                    case System.Net.Sockets.SocketError.TimedOut:
+                        return "Timed out — host did not respond.";
+                    default:
+                        return "Network error: " + sockEx.SocketErrorCode;
+                }
+            }
+
+            if (root is System.Security.Authentication.AuthenticationException)
+            {
+                return "SSL/TLS handshake failed — check the URL scheme (http vs https) and that the server's certificate is valid.";
+            }
+
+            if (root is System.Net.WebException webEx)
+            {
+                return "HTTP error: " + webEx.Status;
+            }
+
+            // Fall back to the innermost message if nothing above matched, since
+            // that's still more useful than the outer wrapper's generic text.
+            return string.IsNullOrEmpty(root.Message) ? ex.Message : root.Message;
+        }
         public async Task<(bool Success, string Message)> TestReachabilityAsync(
             ConnectionEntry connection, EndpointSchema schema, CancellationToken cancellationToken)
         {
@@ -263,7 +309,7 @@ namespace SyncChannel.Fetching
             catch (Exception ex)
             {
                 logger.ErrorException("ChannelSync: Test connection failed against {0}", ex, baseUrl);
-                return (false, ex.Message);
+                return (false, DescribeFailure(ex));
             }
         }
     }

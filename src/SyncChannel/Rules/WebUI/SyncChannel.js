@@ -68,6 +68,12 @@
         el.style.touchAction = 'none';
         el.addEventListener('pointerdown', function (e) {
             if (e.button !== 0 && e.pointerType === 'mouse') return;
+            if (activeDrag) {
+                // A previous drag never got a matching pointerup/cancel (e.g.
+                // released over UI that swallowed the event) — clean it up
+                // before starting a new one instead of stacking ghosts.
+                teardownDrag();
+            }
             e.preventDefault();
             var value = typeof valueFn === 'function' ? valueFn() : (valueFn || '');
             var reorderEl = typeof reorderElFn === 'function' ? reorderElFn() : (reorderElFn || null);
@@ -84,9 +90,10 @@
         activeDrag = { kind: kind, value: value, reorderElement: reorderElement, ghostEl: ghost };
         positionGhost(e.clientX, e.clientY);
 
-        document.addEventListener('pointermove', onPointerMove);
-        document.addEventListener('pointerup', onPointerUp);
-        document.addEventListener('pointercancel', onPointerCancel);
+        document.addEventListener('pointermove', onPointerMove, true);
+        document.addEventListener('pointerup', onPointerUp, true);
+        document.addEventListener('pointercancel', onPointerCancel, true);
+        window.addEventListener('blur', onWindowBlurDuringDrag);
     }
 
     function positionGhost(x, y) {
@@ -198,6 +205,8 @@
 
     function onPointerCancel() { teardownDrag(); }
 
+    function onWindowBlurDuringDrag() { teardownDrag(); }
+
     function teardownDrag() {
         if (highlightedTarget) {
             highlightedTarget.el.classList.remove(highlightedTarget.highlightClass);
@@ -208,9 +217,10 @@
             activeDrag.ghostEl.parentNode.removeChild(activeDrag.ghostEl);
         }
         activeDrag = null;
-        document.removeEventListener('pointermove', onPointerMove);
-        document.removeEventListener('pointerup', onPointerUp);
-        document.removeEventListener('pointercancel', onPointerCancel);
+        document.removeEventListener('pointermove', onPointerMove, true);
+        document.removeEventListener('pointerup', onPointerUp, true);
+        document.removeEventListener('pointercancel', onPointerCancel, true);
+        window.removeEventListener('blur', onWindowBlurDuringDrag);
     }
 
     function findInsertionPoint(container, clientY) {
@@ -1663,7 +1673,11 @@
                     dataType: 'json'
                 }).then(function (result) {
                     testBtn.dataset.busy = 'false';
-                    testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
+                    // On success, connBadge already says "reachable" with a
+                    // timestamp — repeating it here is pure duplication. On
+                    // failure, connBadge only says "unreachable"; the actual
+                    // reason belongs in testStatus, so keep it there.
+                    testStatus.innerText = result.Success ? '' : '❌ ' + result.Message;
                     c.LastTestSucceeded = result.Success;
                     c.LastTestedUtc = new Date().toISOString();
                     connBadge.innerText = connectionBadgeText(c);
@@ -1673,14 +1687,18 @@
                 });
             });
 
+            var statusWrap = document.createElement('span');
+            statusWrap.className = 'connStatusWrap';
+            statusWrap.appendChild(testStatus);
+            statusWrap.appendChild(connBadge);
+
             row.appendChild(labelInput);
             row.appendChild(urlInput);
             row.appendChild(typeSelect);
             row.appendChild(keyWrap);
             row.appendChild(testBtn);
-            row.appendChild(testStatus);
-            row.appendChild(connBadge);
             row.appendChild(removeBtn);
+            row.appendChild(statusWrap);
             list.appendChild(row);
         });
     }
