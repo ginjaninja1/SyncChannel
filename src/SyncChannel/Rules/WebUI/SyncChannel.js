@@ -1673,11 +1673,7 @@
                     dataType: 'json'
                 }).then(function (result) {
                     testBtn.dataset.busy = 'false';
-                    // On success, connBadge already says "reachable" with a
-                    // timestamp — repeating it here is pure duplication. On
-                    // failure, connBadge only says "unreachable"; the actual
-                    // reason belongs in testStatus, so keep it there.
-                    testStatus.innerText = result.Success ? '' : '❌ ' + result.Message;
+                    testStatus.innerText = result.Success ? '✅ Reachable' : '❌ ' + result.Message;
                     c.LastTestSucceeded = result.Success;
                     c.LastTestedUtc = new Date().toISOString();
                     connBadge.innerText = connectionBadgeText(c);
@@ -1716,6 +1712,14 @@
         }).then(function () {
             statusEl.innerText = 'Saved. Any folders using a changed connection are being re-synced now.';
             renderConnectionAndSchemaSelects(view);
+            setTimeout(function () {
+                // 'Re-synced now' is present-tense and stops being true within
+                // seconds — an un-cleared banner would read as still-ongoing
+                // indefinitely, same issue as the earlier stale test-status bug.
+                if (statusEl.innerText === 'Saved. Any folders using a changed connection are being re-synced now.') {
+                    statusEl.innerText = '';
+                }
+            }, 5000);
         }).catch(function () {
             statusEl.innerText = 'Save failed — see server log.';
         });
