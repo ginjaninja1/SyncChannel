@@ -296,9 +296,15 @@
             opContainer.appendChild(makeOperatorChip(o));
         });
 
+        var fieldContainer = view.querySelector('#rcsFieldChips');
+
+        if (!connections.length) {
+            fieldContainer.innerHTML = '<span class="rcsFieldHint">No connections saved yet — add and save one on the Connections tab first.</span>';
+            return;
+        }
+
         var connectionId = view.querySelector('#rcsConnectionSelect').value;
         var schemaId = view.querySelector('#rcsSchemaSelect').value;
-        var fieldContainer = view.querySelector('#rcsFieldChips');
 
         if (!connectionId || !schemaId) {
             fieldContainer.innerHTML = '<span class="rcsFieldHint">Pick a connection and endpoint to discover fields.</span>';
