@@ -272,6 +272,14 @@
         return f ? f.Type : 'String';
     }
 
+    // The schema a condition's field belongs to is the rule set's own
+    // schema, not necessarily whatever the dropdown currently shows — using
+    // ruleSetsFile directly avoids needing to thread `view` through the
+    // whole buildGroupNode/buildConditionNode call chain just for this.
+    function currentRuleSetSchemaId() {
+        var rs = ruleSetsFile.RuleSets[currentRuleSetIndex];
+        return rs ? rs.EndpointSchemaId : null;
+    }
     // ===================================================================
     // Palette construction — schema-gated field list, operators unchanged.
     // ===================================================================
@@ -445,7 +453,14 @@
         fieldSlot.className = 'rcsSlot rcsSlot-field';
         fieldSlot.dataset.slotType = 'field';
         fieldSlot.dataset.value = data.Field || '';
-        fieldSlot.dataset.fieldType = 'String';
+        // On a brand-new condition there's no field yet, so 'String' is a
+        // safe default. On rebuild from saved data, the real type has to be
+        // looked up now — it's only otherwise set when a field chip is
+        // freshly dragged onto this slot (see registerDropTarget below),
+        // which never happens on reload.
+        fieldSlot.dataset.fieldType = data.Field
+            ? fieldTypeInSchema(currentRuleSetSchemaId(), data.Field)
+            : 'String';
         fieldSlot.innerText = data.Field || 'field…';
         if (data.Field) fieldSlot.classList.add('rcsSlot-filled');
 
