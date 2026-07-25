@@ -57,6 +57,32 @@
         public string EndpointSchemaId { get; set; }
     }
 
+    // ---- Field discovery. Cache-first, same contract as PreviewRule below —
+    // reuses whatever's cached for this connection+schema pair, only fetches
+    // live if nothing's cached yet. ForceRefresh bypasses the cache (the
+    // palette's "Refresh" button). Purely computed on every call — nothing
+    // written back to EndpointSchemasFile. See Evidence.md for why: a saved
+    // snapshot of discovered fields would hit the same built-in-schema
+    // save guard that broke favorites, and starting purely-computed avoids
+    // that problem entirely rather than solving it. ----
+    [Route("/ChannelSync/DiscoverFields", "POST")]
+    public class DiscoverFields : IReturn<object>
+    {
+        public string ConnectionId { get; set; }
+        public string EndpointSchemaId { get; set; }
+        public bool ForceRefresh { get; set; }
+    }
+
+    // ---- Field favorites. Deliberately its own route, not folded into
+    // SaveEndpointSchemas — see FieldFavoritesStore for why. ----
+    [Route("/ChannelSync/FieldFavorite", "POST")]
+    public class SetFieldFavorite : IReturn<object>
+    {
+        public string SchemaId { get; set; }
+        public string JsonPath { get; set; }
+        public bool IsFavorite { get; set; }
+    }
+
     public class FetchValidationError
     {
         public string FolderId { get; set; }
@@ -69,6 +95,7 @@
     {
         private readonly ConnectionsStore connectionsStore;
         private readonly EndpointSchemaStore schemaStore;
+        private readonly FieldFavoritesStore favoritesStore;
         private readonly RuleSetStore ruleSetStore;
         private readonly FolderTreeStore treeStore;
         private readonly HttpFetchProvider fetchProvider;
@@ -80,6 +107,7 @@
         public ChannelSyncApiSurface(
             ConnectionsStore connectionsStore,
             EndpointSchemaStore schemaStore,
+            FieldFavoritesStore favoritesStore,
             RuleSetStore ruleSetStore,
             FolderTreeStore treeStore,
             HttpFetchProvider fetchProvider,
@@ -90,6 +118,7 @@
         {
             this.connectionsStore = connectionsStore;
             this.schemaStore = schemaStore;
+            this.favoritesStore = favoritesStore;
             this.ruleSetStore = ruleSetStore;
             this.treeStore = treeStore;
             this.fetchProvider = fetchProvider;
@@ -151,7 +180,19 @@
             return result;
         }
 
-        public object Get(GetEndpointSchemas r) => schemaStore.Load();
+        public object Get(GetEndpointSchemas r)
+        {
+            var file = schemaStore.Load();
+            foreach (var schema in file.Schemas)
+            {
+                var favorites = favoritesStore.GetFavorites(schema.Id);
+                foreach (var field in schema.Fields)
+                {
+                    field.IsFavorite = favorites.Contains(field.JsonPath);
+                }
+            }
+            return file;
+        }
         public object Post(SaveEndpointSchemas r)
         {
             // Built-ins are never overwritten by a client save — the client
@@ -395,6 +436,52 @@
             }
 
             return new { Success = ok, Message = message };
+        }
+
+        public async Task<object> Post(DiscoverFields r)
+        {
+            var schema = schemaStore.Find(r.EndpointSchemaId);
+            var connection = connectionsStore.Load().Connections
+                .FirstOrDefault(c => string.Equals(c.Id, r.ConnectionId, StringComparison.OrdinalIgnoreCase));
+
+            if (schema == null || connection == null)
+            {
+                return new { Success = false, Message = "Connection or endpoint not found — save it first." };
+            }
+
+            var rawJson = r.ForceRefresh ? "[]" : lastResponseStore.Read(connection.Id, schema.Id);
+            bool haveCache = rawJson != "[]";
+
+            if (!haveCache)
+            {
+                var fetched = await fetchProvider.FetchRawAsync(connection, schema, CancellationToken.None);
+                if (fetched == null)
+                {
+                    return new { Success = false, Message = "Fetch failed — check the connection on the Connections tab." };
+                }
+
+                lastResponseStore.Write(connection.Id, schema.Id, fetched);
+                rawJson = fetched;
+            }
+
+            List<SchemaField> discovered;
+            try
+            {
+                discovered = FieldDiscoveryService.Discover(rawJson, favoritesStore.GetFavorites(schema.Id));
+            }
+            catch (Exception ex)
+            {
+                logger.ErrorException("ChannelSync: Field discovery failed for schema '{0}'", ex, schema.DisplayName);
+                return new { Success = false, Message = "Response wasn't a JSON array — discovery only works against list-style endpoints." };
+            }
+
+            return new { Success = true, Fields = discovered };
+        }
+
+        public object Post(SetFieldFavorite r)
+        {
+            favoritesStore.SetFavorite(r.SchemaId, r.JsonPath, r.IsFavorite);
+            return new { Success = true };
         }
 
         /// <summary>

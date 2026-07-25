@@ -117,8 +117,15 @@
                 case JsonValueKind.String:
                     if (DateTime.TryParse(actual.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var actualDate) &&
                         DateTime.TryParse(expected, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var expectedDate) &&
-                        (op == RuleOperator.LT || op == RuleOperator.LTE || op == RuleOperator.GT || op == RuleOperator.GTE))
+                        (op == RuleOperator.LT || op == RuleOperator.LTE || op == RuleOperator.GT || op == RuleOperator.GTE ||
+                         op == RuleOperator.EQ || op == RuleOperator.NEQ))
                     {
+                        // Date-part equality, not full-timestamp equality — a
+                        // user filtering "aired on 2026-05-18" should match
+                        // "2026-05-18T00:00:00Z" without needing to know the
+                        // exact time component the API happens to emit.
+                        if (op == RuleOperator.EQ) return actualDate.Date == expectedDate.Date;
+                        if (op == RuleOperator.NEQ) return actualDate.Date != expectedDate.Date;
                         return CompareOrdered(actualDate.CompareTo(expectedDate), op);
                     }
 

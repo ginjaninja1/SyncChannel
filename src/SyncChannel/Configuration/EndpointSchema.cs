@@ -17,7 +17,7 @@ namespace SyncChannel.Configuration
         ApiKeyQueryAndHeader
     }
 
-    public enum SchemaFieldType { String, Number, Bool, List }
+    public enum SchemaFieldType { String, Number, Bool, List, Date }
 
     // Which kind of Emby channel object this schema's items should become.
     // FlatMedia -> a single playable ChannelItemInfo (Type=Media), the
@@ -38,6 +38,10 @@ namespace SyncChannel.Configuration
         public string DisplayName { get; set; } = string.Empty;
 
         public SchemaFieldType Type { get; set; } = SchemaFieldType.String;
+
+        // Transport-only overlay, not the source of truth — FieldFavoritesStore
+        // is. Stamped onto each field by ChannelSyncApiSurface at read time.
+        public bool IsFavorite { get; set; }
     }
 
     public class EndpointSchema

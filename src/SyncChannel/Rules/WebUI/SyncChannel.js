@@ -10,6 +10,7 @@
     var OPERATORS_BY_TYPE = {
         Bool:   ['EQ'],
         Number: ['LT', 'LTE', 'GT', 'GTE', 'EQ', 'NEQ'],
+        Date:   ['LT', 'LTE', 'GT', 'GTE', 'EQ', 'NEQ'],
         String: ['EQ', 'NEQ', 'CONTAINS', 'NOTCONTAINS', 'STARTSWITH', 'ENDSWITH'],
         List:   ['CONTAINS', 'NOTCONTAINS']
     };
@@ -262,49 +263,200 @@
         return connections.filter(function (x) { return x.Id === connectionId; })[0];
     }
 
-    function schemaFields(schemaId) {
-        var schema = schemas.filter(function (s) { return s.Id === schemaId; })[0];
-        return schema ? schema.Fields : [];
-    }
-
-    function fieldTypeInSchema(schemaId, fieldKey) {
-        var f = schemaFields(schemaId).filter(function (x) { return x.JsonPath === fieldKey; })[0];
+    // schemaFields()/fieldTypeInSchema() removed — they read schema.Fields,
+    // which the palette no longer sources from (see FieldDiscoveryService).
+    // Replaced by fieldTypeFromDiscovery, which reads the same
+    // discoveredFieldsCache the palette populates. Pure function — takes
+    // connectionId/schemaId explicitly rather than reading DOM selects
+    // itself, so callers control exactly which selection it resolves
+    // against (matters once a stale async response could otherwise race a
+    // newer one — see renderCanvasForCurrentIndex).
+    function fieldTypeFromDiscovery(connectionId, schemaId, fieldPath) {
+        var fields = discoveredFieldsCache[discoveryCacheKey(connectionId, schemaId)];
+        if (!fields) return 'String';
+        var f = fields.filter(function (x) { return x.JsonPath === fieldPath; })[0];
         return f ? f.Type : 'String';
     }
 
-    // The schema a condition's field belongs to is the rule set's own
-    // schema, not necessarily whatever the dropdown currently shows — using
-    // ruleSetsFile directly avoids needing to thread `view` through the
-    // whole buildGroupNode/buildConditionNode call chain just for this.
-    function currentRuleSetSchemaId() {
-        var rs = ruleSetsFile.RuleSets[currentRuleSetIndex];
-        return rs ? rs.EndpointSchemaId : null;
-    }
     // ===================================================================
     // Palette construction — schema-gated field list, operators unchanged.
     // ===================================================================
-    function populatePalette(view) {
-        var schemaId = view.querySelector('#rcsSchemaSelect').value;
+    // Client-side cache of the last DiscoverFields result per
+    // connection+schema pair, so switching rule sets or toggling a favorite
+    // doesn't re-hit the network every render — only a genuinely new
+    // connection/schema pairing, or an explicit Refresh, does.
+    var discoveredFieldsCache = {};
 
-        var fieldContainer = view.querySelector('#rcsFieldChips');
-        fieldContainer.innerHTML = '';
-        schemaFields(schemaId).forEach(function (f) {
-            fieldContainer.appendChild(makeFieldChip(f.JsonPath, f.DisplayName, f.Type));
-        });
+    function discoveryCacheKey(connectionId, schemaId) { return connectionId + '|' + schemaId; }
 
+    function populatePalette(view, forceRefresh) {
         var opContainer = view.querySelector('#rcsOperatorChips');
         opContainer.innerHTML = '';
         ALL_OPERATORS.forEach(function (o) {
             opContainer.appendChild(makeOperatorChip(o));
         });
+
+        var connectionId = view.querySelector('#rcsConnectionSelect').value;
+        var schemaId = view.querySelector('#rcsSchemaSelect').value;
+        var fieldContainer = view.querySelector('#rcsFieldChips');
+
+        if (!connectionId || !schemaId) {
+            fieldContainer.innerHTML = '<span class="rcsFieldHint">Pick a connection and endpoint to discover fields.</span>';
+            return;
+        }
+
+        var cached = !forceRefresh && discoveredFieldsCache[discoveryCacheKey(connectionId, schemaId)];
+        if (cached) {
+            renderFieldChips(view, connectionId, schemaId, cached);
+            return;
+        }
+
+        fieldContainer.innerHTML = '<span class="rcsFieldHint">Discovering fields…</span>';
+
+        ensureFieldsDiscovered(connectionId, schemaId, !!forceRefresh)
+            .then(function (fields) {
+                // The user may have switched connection/schema while this
+                // was in flight — don't stomp on whatever they're looking
+                // at now.
+                if (view.querySelector('#rcsConnectionSelect').value !== connectionId ||
+                    view.querySelector('#rcsSchemaSelect').value !== schemaId) {
+                    return;
+                }
+                renderFieldChips(view, connectionId, schemaId, fields);
+            })
+            .catch(function (err) {
+                fieldContainer.innerHTML = '';
+                var errEl = document.createElement('span');
+                errEl.className = 'rcsFieldHint';
+                errEl.innerText = (err && err.message) || 'Field discovery failed.';
+                fieldContainer.appendChild(errEl);
+            });
     }
 
-    function makeFieldChip(fieldPath, displayName, type) {
+    // Purely computed, every time — nothing here is ever written back to
+    // EndpointSchemasFile. Cache-first server-side too (LastResponseCacheStore,
+    // same as PreviewRule), so a cache hit is just a JSON walk, not a live
+    // fetch. See ChannelSyncApiSurface.Post(DiscoverFields).
+    //
+    // Returns a Promise<fields[]>, resolved synchronously from
+    // discoveredFieldsCache when already cached — both the palette
+    // (populatePalette) and the canvas (renderCanvasForCurrentIndex, which
+    // needs field types resolved before it can correctly render locked
+    // operators / date pickers on reload) share this single path so they
+    // can never disagree about what a field's type is.
+    // Memoizes the in-flight Promise itself, not just the completed result —
+    // populatePalette and renderCanvasForCurrentIndex both call this for the
+    // same key on every canvas render; without this, a cold cache (or a
+    // forced refresh) fires two concurrent identical requests before either
+    // resolves. Assumes both callers within a single render pass the same
+    // forceRefresh value (they do — both derive it from the same param) —
+    // if that ever diverges, a non-forced call could get piggybacked onto
+    // an in-flight forced one or vice versa.
+    var discoveryInFlight = {};
+
+    function ensureFieldsDiscovered(connectionId, schemaId, forceRefresh) {
+        var key = discoveryCacheKey(connectionId, schemaId);
+
+        if (!forceRefresh && discoveredFieldsCache[key]) {
+            return Promise.resolve(discoveredFieldsCache[key]);
+        }
+
+        if (discoveryInFlight[key]) {
+            return discoveryInFlight[key];
+        }
+
+        var request = ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('ChannelSync/DiscoverFields'),
+            data: JSON.stringify({ ConnectionId: connectionId, EndpointSchemaId: schemaId, ForceRefresh: !!forceRefresh }),
+            contentType: 'application/json',
+            dataType: 'json'
+        }).then(function (result) {
+            delete discoveryInFlight[key];
+            if (!result || result.Success === false) {
+                throw new Error((result && result.Message) || 'Field discovery failed.');
+            }
+            discoveredFieldsCache[key] = result.Fields || [];
+            return discoveredFieldsCache[key];
+        }).catch(function (err) {
+            delete discoveryInFlight[key];
+            throw err;
+        });
+
+        discoveryInFlight[key] = request;
+        return request;
+    }
+
+    function renderFieldChips(view, connectionId, schemaId, fields) {
+        var fieldContainer = view.querySelector('#rcsFieldChips');
+        fieldContainer.innerHTML = '';
+
+        if (!fields.length) {
+            fieldContainer.innerHTML = '<span class="rcsFieldHint">No fields discovered — response may be empty or not a JSON array.</span>';
+            return;
+        }
+
+        fields.forEach(function (f) {
+            fieldContainer.appendChild(makeFieldChip(f.JsonPath, f.DisplayName, f.Type, !!f.IsFavorite, function () {
+                toggleFieldFavorite(view, connectionId, schemaId, f.JsonPath);
+            }));
+        });
+    }
+
+    // Bool -> Number -> Date -> String -> List, matching FieldDiscoveryService.
+    var FIELD_TYPE_RANK = { Bool: 0, Number: 1, Date: 2, String: 3, List: 4 };
+
+    function sortSchemaFields(fields) {
+        return fields.slice().sort(function (a, b) {
+            if (!!a.IsFavorite !== !!b.IsFavorite) return a.IsFavorite ? -1 : 1;
+            var ra = FIELD_TYPE_RANK.hasOwnProperty(a.Type) ? FIELD_TYPE_RANK[a.Type] : 5;
+            var rb = FIELD_TYPE_RANK.hasOwnProperty(b.Type) ? FIELD_TYPE_RANK[b.Type] : 5;
+            return ra - rb;
+        });
+    }
+
+    function toggleFieldFavorite(view, connectionId, schemaId, fieldPath) {
+        var key = discoveryCacheKey(connectionId, schemaId);
+        var fields = discoveredFieldsCache[key];
+        if (!fields) return;
+
+        var field = fields.filter(function (f) { return f.JsonPath === fieldPath; })[0];
+        if (!field) return;
+
+        field.IsFavorite = !field.IsFavorite;
+        discoveredFieldsCache[key] = sortSchemaFields(fields);
+
+        renderFieldChips(view, connectionId, schemaId, discoveredFieldsCache[key]);
+        persistFieldFavorite(schemaId, fieldPath, field.IsFavorite);
+    }
+
+    // Silent background save — favoriting is a per-user UI preference, not a
+    // rule-set edit, so it doesn't use the visible save banner used
+    // elsewhere. A failed save just means the toggle doesn't survive a page
+    // reload; not worth interrupting the drag-and-drop flow to report.
+    // Deliberately its own route (FieldFavoritesStore), not folded into
+    // SaveEndpointSchemas — that route discards built-in schemas the client
+    // sends and re-attaches the on-disk copy, so a favorite saved through it
+    // on a Radarr/Sonarr field would silently never persist.
+    function persistFieldFavorite(schemaId, jsonPath, isFavorite) {
+        ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('ChannelSync/FieldFavorite'),
+            data: JSON.stringify({ SchemaId: schemaId, JsonPath: jsonPath, IsFavorite: isFavorite }),
+            contentType: 'application/json',
+            dataType: 'json'
+        });
+    }
+
+    function makeFieldChip(fieldPath, displayName, type, isFavorite, onToggleFavorite) {
         var chip = document.createElement('span');
-        chip.className = 'rcsChip rcsChip-field';
+        chip.className = 'rcsChip rcsChip-field' + (isFavorite ? ' rcsChip-field-favorite' : '');
         chip.innerText = displayName || fieldPath;
         chip.dataset.fieldPath = fieldPath;
         chip.dataset.fieldType = type;
+        chip.title = isFavorite
+            ? 'Right-click to remove from favorites'
+            : 'Right-click to favorite — pins it to the top of the palette';
 
         var tag = document.createElement('span');
         tag.className = 'rcsFieldTypeTag';
@@ -314,6 +466,14 @@
         makeDraggableSource(chip, 'field', function () {
             return JSON.stringify({ path: fieldPath, type: type, display: displayName || fieldPath });
         });
+
+        if (onToggleFavorite) {
+            chip.addEventListener('contextmenu', function (e) {
+                e.preventDefault();
+                onToggleFavorite();
+            });
+        }
+
         return chip;
     }
 
@@ -419,9 +579,21 @@
             var input = document.createElement('input');
             input.setAttribute('is', 'emby-input');
             input.className = 'rcsValueInput';
-            input.type = (type === 'Number') ? 'number' : 'text';
-            input.placeholder = type === 'List' ? 'value to match in list…' : 'value…';
-            input.value = initialValue || '';
+
+            if (type === 'Number') {
+                input.type = 'number';
+            } else if (type === 'Date') {
+                input.type = 'date';
+            } else {
+                input.type = 'text';
+                input.placeholder = type === 'List' ? 'value to match in list…' : 'value…';
+            }
+
+            // Date fields store server-side timestamps ("2026-05-18T00:00:00Z")
+            // but <input type=date> only accepts/returns "yyyy-MM-dd" — strip
+            // the time component for display, RuleEvaluator compares by
+            // calendar date so the bare form round-trips correctly either way.
+            input.value = type === 'Date' && initialValue ? initialValue.slice(0, 10) : (initialValue || '');
 
             input.addEventListener('input', function () {
                 widget.dataset.value = input.value;
@@ -437,7 +609,7 @@
     // ===================================================================
     // Condition node
     // ===================================================================
-    function buildConditionNode(data, onChange) {
+    function buildConditionNode(data, onChange, connectionId, schemaId) {
         data = data || {};
 
         var node = document.createElement('div');
@@ -453,14 +625,7 @@
         fieldSlot.className = 'rcsSlot rcsSlot-field';
         fieldSlot.dataset.slotType = 'field';
         fieldSlot.dataset.value = data.Field || '';
-        // On a brand-new condition there's no field yet, so 'String' is a
-        // safe default. On rebuild from saved data, the real type has to be
-        // looked up now — it's only otherwise set when a field chip is
-        // freshly dragged onto this slot (see registerDropTarget below),
-        // which never happens on reload.
-        fieldSlot.dataset.fieldType = data.Field
-            ? fieldTypeInSchema(currentRuleSetSchemaId(), data.Field)
-            : 'String';
+        fieldSlot.dataset.fieldType = data.Field ? fieldTypeFromDiscovery(connectionId, schemaId, data.Field) : 'String';
         fieldSlot.innerText = data.Field || 'field…';
         if (data.Field) fieldSlot.classList.add('rcsSlot-filled');
 
@@ -551,7 +716,7 @@
     // ===================================================================
     // Group node (recursive)
     // ===================================================================
-    function buildGroupNode(data, isRoot, onChange) {
+    function buildGroupNode(data, isRoot, onChange, connectionId, schemaId) {
         data = data || {};
 
         var group = document.createElement('div');
@@ -609,9 +774,9 @@
 
         (data.Children || []).forEach(function (child) {
             if (child.Kind === 'Group') {
-                childrenContainer.appendChild(buildGroupNode(child, false, onChange));
+                childrenContainer.appendChild(buildGroupNode(child, false, onChange, connectionId, schemaId));
             } else {
-                childrenContainer.appendChild(buildConditionNode(child, onChange));
+                childrenContainer.appendChild(buildConditionNode(child, onChange, connectionId, schemaId));
             }
         });
         refreshEmptyHint();
@@ -626,14 +791,14 @@
 
         registerDropTarget(childrenContainer, ['new-condition'], function (value, reorderEl, clientY) {
             var insertBeforeEl = findInsertionPoint(childrenContainer, clientY);
-            childrenContainer.insertBefore(buildConditionNode({}, onChange), insertBeforeEl);
+            childrenContainer.insertBefore(buildConditionNode({}, onChange, connectionId, schemaId), insertBeforeEl);
             refreshEmptyHint();
             if (onChange) onChange();
         });
 
         registerDropTarget(childrenContainer, ['new-group'], function (value, reorderEl, clientY) {
             var insertBeforeEl = findInsertionPoint(childrenContainer, clientY);
-            childrenContainer.insertBefore(buildGroupNode({}, false, onChange), insertBeforeEl);
+            childrenContainer.insertBefore(buildGroupNode({}, false, onChange, connectionId, schemaId), insertBeforeEl);
             refreshEmptyHint();
             if (onChange) onChange();
         });
@@ -893,12 +1058,17 @@
         }
     }
 
-    function renderCanvasForCurrentIndex(view) {
+    var canvasRenderToken = 0; // guards against a stale ensureFieldsDiscovered response rendering over a newer selection
+
+    function renderCanvasForCurrentIndex(view, forceRefresh) {
         var list = view.querySelector('#conditionsList');
         list.innerHTML = '';
         resetDragEngine();
-        populatePalette(view);
+        populatePalette(view, forceRefresh);
         wireStaticPaletteChips(view);
+
+        var connectionId = view.querySelector('#rcsConnectionSelect').value;
+        var schemaId = view.querySelector('#rcsSchemaSelect').value;
 
         if (currentRuleSetIndex < 0) {
             var hint = document.createElement('div');
@@ -918,10 +1088,24 @@
             list.appendChild(lockNotice);
         }
 
-        var onChange = function () { scheduleAutoPreview(view); };
-        list.appendChild(buildGroupNode(ruleSet.Root || emptyRoot(), true, onChange));
+        var loadingHint = document.createElement('div');
+        loadingHint.className = 'rcsFieldHint';
+        loadingHint.innerText = 'Loading field types…';
+        list.appendChild(loadingHint);
 
-        scheduleAutoPreview(view);
+        var renderToken = ++canvasRenderToken;
+
+        ensureFieldsDiscovered(connectionId, schemaId, !!forceRefresh)
+            .catch(function () { return []; }) // best-effort: still render the canvas on discovery failure, conditions just fall back to String typing
+            .then(function () {
+                if (renderToken !== canvasRenderToken) return; // superseded by a newer render — drop this response
+                if (loadingHint.parentNode) loadingHint.parentNode.removeChild(loadingHint);
+
+                var onChange = function () { scheduleAutoPreview(view); };
+                list.appendChild(buildGroupNode(ruleSet.Root || emptyRoot(), true, onChange, connectionId, schemaId));
+
+                scheduleAutoPreview(view);
+            });
     }
 
     function switchRuleSetTo(view, idx) {
@@ -974,6 +1158,22 @@
 
         var schemaSel = view.querySelector('#rcsSchemaSelect');
         schemaSel.addEventListener('change', function () { onSchemaChanged(view); });
+
+        var refreshBtn = view.querySelector('#rcsRefreshFieldsBtn');
+        if (refreshBtn && !refreshBtn.dataset.wired) {
+            refreshBtn.dataset.wired = '1';
+            refreshBtn.addEventListener('click', function () {
+                var connectionId = view.querySelector('#rcsConnectionSelect').value;
+                var schemaId = view.querySelector('#rcsSchemaSelect').value;
+                if (!connectionId || !schemaId) return;
+
+                // forceRefresh=true bypasses both this client's cache and
+                // the server's LastResponseCacheStore — a plain client-side
+                // cache delete alone would still return the same stale
+                // server-cached response.
+                renderCanvasForCurrentIndex(view, true);
+            });
+        }
     }
 
     function saveRuleSets(view) {
