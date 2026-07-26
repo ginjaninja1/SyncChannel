@@ -27,6 +27,24 @@ namespace SyncChannel.Channels
         private const string SeasonIdPrefix = "syncchannel-season-";
         private const string EpisodeIdPrefix = "syncchannel-episode-";
 
+        // MusicArtistAlbum kind — mirrors Series/Season/Episode's three-level
+        // synthetic shape, since the endpoint only ever returns one flat row
+        // per artist (no real album/track-level data to enumerate).
+        private const string ArtistIdPrefix = "syncchannel-artist-";
+        private const string AlbumIdPrefix = "syncchannel-album-";
+        private const string SongIdPrefix = "syncchannel-song-";
+
+        // PhotoAlbum kind — only two levels (PhotoAlbum -> Photo), since a
+        // real image URL is available per row and doesn't need a second
+        // synthetic layer the way Series/Music do.
+        private const string PhotoAlbumIdPrefix = "syncchannel-photoalbum-";
+        private const string PhotoIdPrefix = "syncchannel-photo-";
+
+        // GenericContainer kind — N admin-configured levels. Level is
+        // encoded in the id itself ("syncchannel-container-{level}-...")
+        // since depth is schema-defined per item, not fixed like the others.
+        private const string ContainerIdPrefix = "syncchannel-container-";
+
         private readonly FolderTreeStore treeStore;
         private readonly FolderCacheStore cacheStore;
         private readonly IApplicationPaths appPaths;
@@ -71,9 +89,11 @@ namespace SyncChannel.Channels
 
         public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
-            // Synthetic Series -> Season -> Episode branch. Checked before
-            // the admin-folder-tree logic below, since these ids never
-            // correspond to a FolderNode.
+            // Synthetic-chain branches. Checked before the admin-folder-tree
+            // logic below, since none of these ids ever correspond to a
+            // FolderNode. Longer/more-specific prefixes are checked first
+            // where one prefix could otherwise be a substring confusion risk
+            // (none currently overlap, but ordering is kept deliberate).
             if (!string.IsNullOrEmpty(query.FolderId))
             {
                 if (query.FolderId.StartsWith(SeriesIdPrefix, StringComparison.Ordinal))
@@ -84,6 +104,26 @@ namespace SyncChannel.Channels
                 if (query.FolderId.StartsWith(SeasonIdPrefix, StringComparison.Ordinal))
                 {
                     return Task.FromResult(BuildEpisodeListing(query.FolderId));
+                }
+
+                if (query.FolderId.StartsWith(ArtistIdPrefix, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(BuildAlbumListing(query.FolderId));
+                }
+
+                if (query.FolderId.StartsWith(AlbumIdPrefix, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(BuildSongListing(query.FolderId));
+                }
+
+                if (query.FolderId.StartsWith(PhotoAlbumIdPrefix, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(BuildPhotoListing(query.FolderId));
+                }
+
+                if (query.FolderId.StartsWith(ContainerIdPrefix, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(BuildContainerLevelListing(query.FolderId));
                 }
             }
 
@@ -132,9 +172,20 @@ namespace SyncChannel.Channels
 
         public Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {
+            // Photo doesn't implement IHasMediaSources (confirmed via ILSpy)
+            // — its Path is set directly from ChannelItemInfo.MediaSources at
+            // creation time in GetChannelItemEntity, not via this callback.
+            // Nothing to do here for photo ids.
+            if (id.StartsWith(PhotoIdPrefix, StringComparison.Ordinal))
+            {
+                return Task.FromResult<IEnumerable<MediaSourceInfo>>(Array.Empty<MediaSourceInfo>());
+            }
+
             string folderId = id.StartsWith(EpisodeIdPrefix, StringComparison.Ordinal)
                 ? ParseOwningFolderIdFromSyntheticId(id.Substring(EpisodeIdPrefix.Length))
-                : ParseItemOwningFolderId(id);
+                : id.StartsWith(SongIdPrefix, StringComparison.Ordinal)
+                    ? ParseOwningFolderIdFromSyntheticId(id.Substring(SongIdPrefix.Length))
+                    : ParseItemOwningFolderId(id);
 
             var stubVideoPath = folderId == null
                 ? string.Empty
@@ -151,6 +202,12 @@ namespace SyncChannel.Channels
                 return Task.FromResult<IEnumerable<MediaSourceInfo>>(Array.Empty<MediaSourceInfo>());
             }
 
+            // NOTE: Song leaves currently reuse the same video stub file as
+            // everything else — there is no dedicated audio stub shipped
+            // with the plugin yet. This proves the Artist->Album->Song
+            // shape and playback wiring end-to-end, but a real audio file
+            // would be needed for a genuinely correct listening experience.
+            // Flagging rather than guessing at an assumption here.
             var source = BuildMediaSource(id, stubVideoPath);
             return Task.FromResult<IEnumerable<MediaSourceInfo>>(new List<MediaSourceInfo> { source });
         }
@@ -165,14 +222,19 @@ namespace SyncChannel.Channels
         internal static string BuildItemId(string folderNodeId, string stableId) =>
             ItemIdPrefix + folderNodeId + "::" + stableId;
 
-        // Shared "folderNodeId::stableId" split, used both by flat media
-        // items (ItemIdPrefix) and by the synthetic series/season/episode
-        // chain (which wraps the same folderNodeId::stableId payload under
-        // extra prefixes).
+        // Shared "folderNodeId::stableId" split, used by every kind's
+        // top-level item id (flat media, series, artist, photo album,
+        // container level 0) and by every synthetic child id that wraps one.
         private static string ParseFolderNodeIdFromPayload(string payload)
         {
             var separatorIndex = payload.IndexOf("::", StringComparison.Ordinal);
             return separatorIndex < 0 ? null : payload.Substring(0, separatorIndex);
+        }
+
+        private static string ParseStableIdFromPayload(string payload)
+        {
+            var separatorIndex = payload.IndexOf("::", StringComparison.Ordinal);
+            return separatorIndex < 0 ? null : payload.Substring(separatorIndex + 2);
         }
 
         private static string ParseItemOwningFolderId(string channelItemId)
@@ -185,12 +247,16 @@ namespace SyncChannel.Channels
             return ParseFolderNodeIdFromPayload(channelItemId.Substring(ItemIdPrefix.Length));
         }
 
-        // Strips whichever synthetic wrapper prefixes (Season/Series) are
-        // present, down to the raw "folderNodeId::stableId" payload, then
-        // extracts the folderNodeId the same way ParseItemOwningFolderId does.
-        private static string ParseOwningFolderIdFromSyntheticId(string seasonOrSeriesId)
+        // Strips whichever synthetic wrapper prefixes are present, down to
+        // the raw "folderNodeId::stableId" payload, then extracts the
+        // folderNodeId. Handles every wrapper depth in use: Season/Series
+        // (2 deep), Album/Artist (2 deep), and PhotoAlbum (1 deep, but
+        // harmless to run through the same strip since PhotoAlbumIdPrefix
+        // wrapping isn't present for photo ids — those go through
+        // BuildPhotoListing's own parse instead).
+        private static string ParseOwningFolderIdFromSyntheticId(string wrappedId)
         {
-            var value = seasonOrSeriesId;
+            var value = wrappedId;
 
             if (value.StartsWith(SeasonIdPrefix, StringComparison.Ordinal))
             {
@@ -200,6 +266,16 @@ namespace SyncChannel.Channels
             if (value.StartsWith(SeriesIdPrefix, StringComparison.Ordinal))
             {
                 value = value.Substring(SeriesIdPrefix.Length);
+            }
+
+            if (value.StartsWith(AlbumIdPrefix, StringComparison.Ordinal))
+            {
+                value = value.Substring(AlbumIdPrefix.Length);
+            }
+
+            if (value.StartsWith(ArtistIdPrefix, StringComparison.Ordinal))
+            {
+                value = value.Substring(ArtistIdPrefix.Length);
             }
 
             return ParseFolderNodeIdFromPayload(value);
@@ -213,6 +289,17 @@ namespace SyncChannel.Channels
             FolderType = ChannelFolderType.Container
         };
 
+        private CachedChannelItem FindCachedItem(string folderNodeId, string stableId)
+        {
+            if (folderNodeId == null || stableId == null)
+            {
+                return null;
+            }
+
+            return cacheStore.Read(folderNodeId).Items
+                .FirstOrDefault(i => string.Equals(i.StableId, stableId, StringComparison.OrdinalIgnoreCase));
+        }
+
         private ChannelItemInfo ToChannelItemInfo(CachedChannelItem item, string folderNodeId, string stubVideoPath)
         {
             if (string.IsNullOrEmpty(item.StableId))
@@ -221,11 +308,28 @@ namespace SyncChannel.Channels
                 return null;
             }
 
-            if (item.ObjectKind == ChannelObjectKind.Series)
+            switch (item.ObjectKind)
             {
-                return BuildSeriesFolderItem(item, folderNodeId);
-            }
+                case ChannelObjectKind.Series:
+                    return BuildSeriesFolderItem(item, folderNodeId);
 
+                case ChannelObjectKind.MusicArtistAlbum:
+                    return BuildArtistFolderItem(item, folderNodeId);
+
+                case ChannelObjectKind.PhotoAlbum:
+                    return BuildPhotoAlbumFolderItem(item, folderNodeId);
+
+                case ChannelObjectKind.GenericContainer:
+                    return BuildContainerFolderItem(item, folderNodeId, level: 0);
+
+                case ChannelObjectKind.FlatMedia:
+                default:
+                    return BuildFlatMediaItem(item, folderNodeId, stubVideoPath);
+            }
+        }
+
+        private ChannelItemInfo BuildFlatMediaItem(CachedChannelItem item, string folderNodeId, string stubVideoPath)
+        {
             var itemId = BuildItemId(folderNodeId, item.StableId);
 
             var info = new ChannelItemInfo
@@ -235,8 +339,8 @@ namespace SyncChannel.Channels
                 OriginalTitle = item.OriginalTitle,
                 Overview = item.Overview,
                 Type = ChannelItemType.Media,
-                MediaType = ChannelMediaType.Video,
-                ContentType = ChannelMediaContentType.Movie,
+                MediaType = ToChannelMediaType(item.LeafMediaType),
+                ContentType = ToChannelMediaContentType(item.LeafContentType),
                 ProductionYear = item.Year,
                 ImageUrl = item.PosterUrl,
                 ForceUpdate = true
@@ -332,6 +436,260 @@ namespace SyncChannel.Channels
             return new ChannelItemResult { Items = new List<ChannelItemInfo> { episode }, TotalRecordCount = 1 };
         }
 
+        // ---- MusicArtistAlbum: Artist (real top item) -> Album (synthetic,
+        // "Album 1") -> Song (synthetic, tagged with Artist/AlbumArtist/Album
+        // from the original fetched row). Same three-level shape as
+        // Series/Season/Episode, same reasoning: the endpoint only returns
+        // one flat row per artist, no real album/track-level data exists to
+        // enumerate. ----
+
+        private static ChannelItemInfo BuildArtistFolderItem(CachedChannelItem item, string folderNodeId)
+        {
+            var info = new ChannelItemInfo
+            {
+                Id = ArtistIdPrefix + folderNodeId + "::" + item.StableId,
+                Name = item.Title,
+                Overview = item.Overview,
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.MusicArtist,
+                ImageUrl = item.PosterUrl,
+                ForceUpdate = true
+            };
+
+            foreach (var kvp in item.ProviderIds)
+            {
+                info.ProviderIds[kvp.Key] = kvp.Value;
+            }
+
+            return info;
+        }
+
+        private ChannelItemResult BuildAlbumListing(string artistId)
+        {
+            var folderNodeId = ParseOwningFolderIdFromSyntheticId(artistId);
+            var stableId = ParseStableIdFromPayload(artistId.Substring(ArtistIdPrefix.Length));
+            var source = FindCachedItem(folderNodeId, stableId);
+
+            var album = new ChannelItemInfo
+            {
+                Id = AlbumIdPrefix + artistId,
+                Name = "Album 1",
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.MusicAlbum,
+                ImageUrl = source?.PosterUrl,
+                ForceUpdate = true
+            };
+
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { album }, TotalRecordCount = 1 };
+        }
+
+        private ChannelItemResult BuildSongListing(string albumId)
+        {
+            var folderNodeId = ParseOwningFolderIdFromSyntheticId(albumId);
+            var stableId = ParseStableIdFromPayload(albumId.Substring(AlbumIdPrefix.Length + ArtistIdPrefix.Length));
+            var source = FindCachedItem(folderNodeId, stableId);
+
+            var stubVideoPath = folderNodeId == null
+                ? string.Empty
+                : cacheStore.Read(folderNodeId).StubVideoPath;
+
+            if (string.IsNullOrEmpty(stubVideoPath))
+            {
+                stubVideoPath = ResolveDefaultStubPath();
+            }
+
+            var songId = SongIdPrefix + albumId;
+
+            var song = new ChannelItemInfo
+            {
+                Id = songId,
+                Name = "Track 1",
+                Type = ChannelItemType.Media,
+                MediaType = ChannelMediaType.Audio,
+                ContentType = ChannelMediaContentType.Song,
+                IndexNumber = 1,
+                ParentIndexNumber = 1,
+                Artists = string.IsNullOrEmpty(source?.Artist) ? null : new List<string> { source.Artist },
+                AlbumArtists = string.IsNullOrEmpty(source?.AlbumArtist) ? null : new List<string> { source.AlbumArtist },
+                //Album = source?.Album,
+                ForceUpdate = true
+            };
+
+            if (!string.IsNullOrEmpty(stubVideoPath))
+            {
+                song.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(songId, stubVideoPath) };
+            }
+
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { song }, TotalRecordCount = 1 };
+        }
+
+        // ---- PhotoAlbum: PhotoAlbum (real top item, real Emby class) ->
+        // Photo (synthetic, single child — the row's own MediaFileUrl IS
+        // the photo, no second synthetic layer needed). ----
+
+        private static ChannelItemInfo BuildPhotoAlbumFolderItem(CachedChannelItem item, string folderNodeId)
+        {
+            var info = new ChannelItemInfo
+            {
+                Id = PhotoAlbumIdPrefix + folderNodeId + "::" + item.StableId,
+                Name = item.Title,
+                Overview = item.Overview,
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.PhotoAlbum,
+                ImageUrl = item.PosterUrl,
+                ForceUpdate = true
+            };
+
+            foreach (var kvp in item.ProviderIds)
+            {
+                info.ProviderIds[kvp.Key] = kvp.Value;
+            }
+
+            return info;
+        }
+
+        private ChannelItemResult BuildPhotoListing(string photoAlbumId)
+        {
+            var folderNodeId = ParseOwningFolderIdFromSyntheticId(photoAlbumId.Substring(PhotoAlbumIdPrefix.Length));
+            var stableId = ParseStableIdFromPayload(photoAlbumId.Substring(PhotoAlbumIdPrefix.Length));
+            var source = FindCachedItem(folderNodeId, stableId);
+
+            var photoId = PhotoIdPrefix + photoAlbumId;
+
+            var photo = new ChannelItemInfo
+            {
+                Id = photoId,
+                Name = source?.Title ?? "Photo 1",
+                // Confirmed via live test (Evidence.md): this specific,
+                // semantically-odd MediaType/ContentType combination is
+                // what Emby's construction switch maps to a real Photo
+                // BaseItem. Do not "correct" this to something more sensible
+                // — it was checked, not guessed.
+                Type = ChannelItemType.Media,
+                MediaType = ChannelMediaType.Video,
+                ContentType = ChannelMediaContentType.Trailer,
+                ForceUpdate = true
+            };
+
+            if (!string.IsNullOrEmpty(source?.MediaFileUrl))
+            {
+                photo.MediaSources = new List<MediaSourceInfo> { BuildRemoteOrLocalMediaSource(photoId, source.MediaFileUrl) };
+            }
+
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { photo }, TotalRecordCount = 1 };
+        }
+
+        // ---- GenericContainer: N admin-configured Container-typed levels,
+        // then one configurable leaf. Level is carried in the id itself
+        // since depth varies per schema. ----
+
+        private static ChannelItemInfo BuildContainerFolderItem(CachedChannelItem item, string folderNodeId, int level)
+        {
+            var name = level == 0
+                ? item.Title
+                : (item.ContainerLevelNames != null && level - 1 < item.ContainerLevelNames.Count
+                    ? item.ContainerLevelNames[level - 1]
+                    : "Folder");
+
+            return new ChannelItemInfo
+            {
+                Id = ContainerIdPrefix + level + "-" + folderNodeId + "::" + item.StableId,
+                Name = name,
+                Overview = level == 0 ? item.Overview : string.Empty,
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.Container,
+                ImageUrl = level == 0 ? item.PosterUrl : null,
+                ForceUpdate = true
+            };
+        }
+
+        private ChannelItemResult BuildContainerLevelListing(string containerId)
+        {
+            var withoutPrefix = containerId.Substring(ContainerIdPrefix.Length);
+            var dashIndex = withoutPrefix.IndexOf('-');
+            var level = int.Parse(withoutPrefix.Substring(0, dashIndex));
+            var payload = withoutPrefix.Substring(dashIndex + 1); // folderNodeId::stableId
+
+            var folderNodeId = ParseFolderNodeIdFromPayload(payload);
+            var stableId = ParseStableIdFromPayload(payload);
+            var source = FindCachedItem(folderNodeId, stableId);
+
+            if (source == null)
+            {
+                logger.Warn("ChannelSync: BuildContainerLevelListing could not find source item for '{0}' — returning empty.", containerId);
+                return new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 };
+            }
+
+            var nextLevel = level + 1;
+
+            if (nextLevel < source.ContainerLevelCount)
+            {
+                var nextFolder = BuildContainerFolderItem(source, folderNodeId, nextLevel);
+                return new ChannelItemResult { Items = new List<ChannelItemInfo> { nextFolder }, TotalRecordCount = 1 };
+            }
+
+            // Reached the configured depth — build the single leaf.
+            var stubVideoPath = folderNodeId == null
+                ? string.Empty
+                : cacheStore.Read(folderNodeId).StubVideoPath;
+
+            if (string.IsNullOrEmpty(stubVideoPath))
+            {
+                stubVideoPath = ResolveDefaultStubPath();
+            }
+
+            var leafId = "syncchannel-gcleaf-" + containerId;
+
+            var leaf = new ChannelItemInfo
+            {
+                Id = leafId,
+                Name = source.Title,
+                Overview = source.Overview,
+                Type = ChannelItemType.Media,
+                MediaType = ToChannelMediaType(source.LeafMediaType),
+                ContentType = ToChannelMediaContentType(source.LeafContentType),
+                ForceUpdate = true
+            };
+
+            if (!string.IsNullOrEmpty(stubVideoPath))
+            {
+                leaf.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(leafId, stubVideoPath) };
+            }
+
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { leaf }, TotalRecordCount = 1 };
+        }
+
+        // Explicit, not Enum.Parse-by-name — deliberately a hard mapping so
+        // a mismatch fails to compile rather than silently misrouting at
+        // runtime if either enum's members are ever reordered.
+        private static ChannelMediaType ToChannelMediaType(LeafMediaType type)
+        {
+            switch (type)
+            {
+                case LeafMediaType.Audio: return ChannelMediaType.Audio;
+                case LeafMediaType.Video:
+                default: return ChannelMediaType.Video;
+            }
+        }
+
+        private static ChannelMediaContentType ToChannelMediaContentType(LeafContentType type)
+        {
+            switch (type)
+            {
+                case LeafContentType.Clip: return ChannelMediaContentType.Clip;
+                case LeafContentType.Podcast: return ChannelMediaContentType.Podcast;
+                case LeafContentType.Trailer: return ChannelMediaContentType.Trailer;
+                case LeafContentType.Episode: return ChannelMediaContentType.Episode;
+                case LeafContentType.Song: return ChannelMediaContentType.Song;
+                case LeafContentType.MovieExtra: return ChannelMediaContentType.MovieExtra;
+                case LeafContentType.TvExtra: return ChannelMediaContentType.TvExtra;
+                case LeafContentType.GameExtra: return ChannelMediaContentType.GameExtra;
+                case LeafContentType.MusicVideo: return ChannelMediaContentType.MusicVideo;
+                case LeafContentType.Movie:
+                default: return ChannelMediaContentType.Movie;
+            }
+        }
+
         private static MediaSourceInfo BuildMediaSource(string itemId, string stubVideoPath) => new MediaSourceInfo
         {
             Id = itemId,
@@ -344,6 +702,27 @@ namespace SyncChannel.Channels
             SupportsTranscoding = true,
             Name = "Coming Soon"
         };
+
+        // PhotoAlbum leaf only — the schema's MediaFileUrlField is typically
+        // a remote image URL (same shape as PosterUrl), not a local stub
+        // file, so this branches on that instead of always assuming File.
+        private static MediaSourceInfo BuildRemoteOrLocalMediaSource(string itemId, string path)
+        {
+            var isRemote = path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                           path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+            return new MediaSourceInfo
+            {
+                Id = itemId,
+                Path = path,
+                Protocol = isRemote ? MediaProtocol.Http : MediaProtocol.File,
+                IsRemote = isRemote,
+                SupportsDirectPlay = true,
+                SupportsDirectStream = true,
+                SupportsTranscoding = true,
+                Name = "Coming Soon"
+            };
+        }
 
         private string ResolveDefaultStubPath()
         {
