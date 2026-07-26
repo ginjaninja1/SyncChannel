@@ -47,12 +47,15 @@ namespace SyncChannel.Fetching
             }
 
             var baseUrl = connection.BaseUrl.TrimEnd('/') + schema.Path;
-            var url = baseUrl + "?apikey=" + Uri.EscapeDataString(connection.ApiKey);
+            var url = baseUrl + "?" + BuildQueryString(schema, connection);
 
             var options = new HttpRequestOptions { Url = url, CancellationToken = cancellationToken };
+            // Kept in addition to the query param for *arr-family compat
+            // (confirmed working that way) — harmless extra header against
+            // sources that ignore it, e.g. Emby.
             options.RequestHeaders["X-Api-Key"] = connection.ApiKey;
 
-            logger.Info("ChannelSync: Fetching {0}?apikey=***", baseUrl);
+            logger.Info("ChannelSync: Fetching {0}?{1}", baseUrl, RedactedQueryString(schema));
 
             try
             {
@@ -270,18 +273,56 @@ namespace SyncChannel.Fetching
             // that's still more useful than the outer wrapper's generic text.
             return string.IsNullOrEmpty(root.Message) ? ex.Message : root.Message;
         }
-        public async Task<(bool Success, string Message)> TestReachabilityAsync(
-            ConnectionEntry connection, EndpointSchema schema, CancellationToken cancellationToken)
+        // Query-param name and any static params (e.g. Limit=25) are
+        // schema-defined, not hardcoded — different sources use different
+        // key parameter names (Emby's is "api_key", not "apikey").
+        private static string BuildQueryString(EndpointSchema schema, ConnectionEntry connection)
         {
-            if (!string.IsNullOrEmpty(connection.SystemType) && !string.IsNullOrEmpty(schema.SystemType) &&
-                !string.Equals(connection.SystemType, schema.SystemType, StringComparison.OrdinalIgnoreCase))
+            var paramName = string.IsNullOrWhiteSpace(schema.ApiKeyParamName) ? "apikey" : schema.ApiKeyParamName;
+            var parts = new List<string> { Uri.EscapeDataString(paramName) + "=" + Uri.EscapeDataString(connection.ApiKey) };
+
+            if (schema.StaticQueryParams != null)
             {
-                return (false, string.Format(
-                    "Connection is system type '{0}' but you're testing against a '{1}' endpoint — pick a matching endpoint.",
-                    connection.SystemType, schema.SystemType));
+                foreach (var kvp in schema.StaticQueryParams)
+                {
+                    if (string.IsNullOrEmpty(kvp.Key)) continue;
+                    parts.Add(Uri.EscapeDataString(kvp.Key) + "=" + Uri.EscapeDataString(kvp.Value ?? string.Empty));
+                }
             }
 
-            var baseUrl = connection.BaseUrl.TrimEnd('/') + schema.Path;
+            return string.Join("&", parts);
+        }
+
+        // Same as BuildQueryString but with the key's value redacted, for logging.
+        private static string RedactedQueryString(EndpointSchema schema)
+        {
+            var paramName = string.IsNullOrWhiteSpace(schema.ApiKeyParamName) ? "apikey" : schema.ApiKeyParamName;
+            var parts = new List<string> { paramName + "=***" };
+
+            if (schema.StaticQueryParams != null)
+            {
+                foreach (var kvp in schema.StaticQueryParams)
+                {
+                    if (string.IsNullOrEmpty(kvp.Key)) continue;
+                    parts.Add(kvp.Key + "=" + kvp.Value);
+                }
+            }
+
+            return string.Join("&", parts);
+        }
+
+        // Deliberately schema-agnostic — a Connection is just a (URL, key)
+        // pair and can be tested for bare reachability before any
+        // EndpointSchema exists to pair it with. This can only prove the
+        // host is up and answering HTTP; it cannot prove the API key is
+        // valid, since there's no endpoint-specific path to call it
+        // against. Real credential validation happens per-endpoint, via
+        // the schema editor's field-discovery fetch (which has both a
+        // Path and the connection's key to combine into a real call).
+        public async Task<(bool Success, string Message)> TestReachabilityAsync(
+            ConnectionEntry connection, CancellationToken cancellationToken)
+        {
+            var baseUrl = connection.BaseUrl.TrimEnd('/');
             var url = baseUrl + "?apikey=" + Uri.EscapeDataString(connection.ApiKey);
 
             logger.Info("ChannelSync: Testing connection against {0}?apikey=***", baseUrl);
@@ -307,7 +348,7 @@ namespace SyncChannel.Fetching
                 using (var response = await httpClient.GetResponse(options).ConfigureAwait(false))
                 {
                     logger.Info("ChannelSync: Test connection succeeded against {0}.", baseUrl);
-                    return (true, "Reachable.");
+                    return (true, "Server reachable. This only confirms the host is up — it can't confirm your API key is valid without a specific endpoint to call. Add an Endpoint Schema and use its field-discovery fetch to confirm credentials.");
                 }
             }
             catch (Exception ex)

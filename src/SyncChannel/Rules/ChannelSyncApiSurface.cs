@@ -54,7 +54,6 @@
         public string BaseUrl { get; set; }
         public string ApiKey { get; set; }
         public string SystemType { get; set; }
-        public string EndpointSchemaId { get; set; }
     }
 
     // ---- Field discovery. Cache-first, same contract as PreviewRule below —
@@ -69,7 +68,19 @@
     public class DiscoverFields : IReturn<object>
     {
         public string ConnectionId { get; set; }
+
+        // Used when the schema is already saved — looked up via
+        // schemaStore.Find. Ignored if DraftSchema is supplied.
         public string EndpointSchemaId { get; set; }
+
+        // The full in-progress schema, sent directly by the editor so a
+        // brand-new, not-yet-saved schema can still be tested — Path and
+        // role fields don't need a round trip through Save first. Caching
+        // (lastResponseStore) still keys off Schema.Id, which the client
+        // already generates locally before the first save, so this is
+        // consistent with the saved-schema path once it does get saved.
+        public EndpointSchema DraftSchema { get; set; }
+
         public bool ForceRefresh { get; set; }
     }
 
@@ -404,12 +415,6 @@
 
         public async Task<object> Post(TestConnection r)
         {
-            var schema = schemaStore.Find(r.EndpointSchemaId);
-            if (schema == null)
-            {
-                return new { Success = false, Message = "Endpoint schema not found." };
-            }
-
             var probeConnection = new ConnectionEntry
             {
                 BaseUrl = r.BaseUrl,
@@ -417,7 +422,7 @@
                 SystemType = r.SystemType
             };
 
-            var (ok, message) = await fetchProvider.TestReachabilityAsync(probeConnection, schema, CancellationToken.None);
+            var (ok, message) = await fetchProvider.TestReachabilityAsync(probeConnection, CancellationToken.None);
 
             // If this connection also exists on disk, persist the badge so
             // every tab that lists connections can show it without a live
@@ -440,13 +445,13 @@
 
         public async Task<object> Post(DiscoverFields r)
         {
-            var schema = schemaStore.Find(r.EndpointSchemaId);
+            var schema = r.DraftSchema ?? schemaStore.Find(r.EndpointSchemaId);
             var connection = connectionsStore.Load().Connections
                 .FirstOrDefault(c => string.Equals(c.Id, r.ConnectionId, StringComparison.OrdinalIgnoreCase));
 
             if (schema == null || connection == null)
             {
-                return new { Success = false, Message = "Connection or endpoint not found — save it first." };
+                return new { Success = false, Message = "Connection not found, or no schema/draft schema supplied." };
             }
 
             var rawJson = r.ForceRefresh ? "[]" : lastResponseStore.Read(connection.Id, schema.Id);

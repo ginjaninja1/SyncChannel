@@ -360,21 +360,26 @@
     // an in-flight forced one or vice versa.
     var discoveryInFlight = {};
 
-    function ensureFieldsDiscovered(connectionId, schemaId, forceRefresh) {
+    function ensureFieldsDiscovered(connectionId, schemaId, forceRefresh, draftSchema) {
         var key = discoveryCacheKey(connectionId, schemaId);
 
-        if (!forceRefresh && discoveredFieldsCache[key]) {
-            return Promise.resolve(discoveredFieldsCache[key]);
-        }
+        // A draft (not-yet-saved) schema always bypasses the cache/in-flight
+        // dedup below -- it's actively being edited, so a stale cached
+        // result from a prior attempt would be actively misleading.
+        if (!draftSchema) {
+            if (!forceRefresh && discoveredFieldsCache[key]) {
+                return Promise.resolve(discoveredFieldsCache[key]);
+            }
 
-        if (discoveryInFlight[key]) {
-            return discoveryInFlight[key];
+            if (discoveryInFlight[key]) {
+                return discoveryInFlight[key];
+            }
         }
 
         var request = ApiClient.ajax({
             type: 'POST',
             url: ApiClient.getUrl('ChannelSync/DiscoverFields'),
-            data: JSON.stringify({ ConnectionId: connectionId, EndpointSchemaId: schemaId, ForceRefresh: !!forceRefresh }),
+            data: JSON.stringify({ ConnectionId: connectionId, EndpointSchemaId: schemaId, ForceRefresh: !!forceRefresh, DraftSchema: draftSchema || null }),
             contentType: 'application/json',
             dataType: 'json'
         }).then(function (result) {
@@ -382,14 +387,19 @@
             if (!result || result.Success === false) {
                 throw new Error((result && result.Message) || 'Field discovery failed.');
             }
-            discoveredFieldsCache[key] = result.Fields || [];
-            return discoveredFieldsCache[key];
+            if (!draftSchema) {
+                discoveredFieldsCache[key] = result.Fields || [];
+                return discoveredFieldsCache[key];
+            }
+            return result.Fields || [];
         }).catch(function (err) {
             delete discoveryInFlight[key];
             throw err;
         });
 
-        discoveryInFlight[key] = request;
+        if (!draftSchema) {
+            discoveryInFlight[key] = request;
+        }
         return request;
     }
 
@@ -1481,11 +1491,20 @@
 
         container.appendChild(esLabeledRow('Display name', esTextInput(schema.DisplayName, locked, function (v) { schema.DisplayName = v; renderSchemaSelect(view); })));
 
-        container.appendChild(esLabeledRow('System type', esTextInput(schema.SystemType, locked, function (v) { schema.SystemType = v; }),
-            'Must match a Connection\'s System Type for a Fetch to be allowed to pair them (see the Connections tab).'));
+        // Dropdown, not free text -- must match a value already defined on
+        // the Connections tab, not an independently-typed string that could
+        // silently fail to match any real connection.
+        var systemTypeOptions = KNOWN_SYSTEM_TYPES.map(function (t) { return { value: t, label: t }; });
+        if (!schema.SystemType) systemTypeOptions.unshift({ value: '', label: '(choose a system type)' });
+        container.appendChild(esLabeledRow('System type', esSelectInput(systemTypeOptions, schema.SystemType, locked, function (v) { schema.SystemType = v; renderSchemaForm(view); }),
+            'Must match a Connection\'s System Type for a Fetch to be allowed to pair them. New system types are defined on the Connections tab, not here.'));
 
         container.appendChild(esLabeledRow('Endpoint path', esTextInput(schema.Path, locked, function (v) { schema.Path = v; }),
             'Appended to the connection\'s base URL, e.g. "/api/v3/movie".'));
+
+        if (!locked) {
+            container.appendChild(buildSchemaTestAndSuggestRow(view, schema));
+        }
 
         container.appendChild(esLabeledRow('Object kind', esSelectInput(OBJECT_KINDS, schema.ObjectKind, locked, function (v) {
             schema.ObjectKind = v;
@@ -1539,54 +1558,87 @@
             }
         }
 
-        // ---- Field-role suggestion (existing, saved schemas only) ----
-        if (!locked) {
-            var suggestWrap = document.createElement('div');
-            suggestWrap.style.marginTop = '1em';
-            suggestWrap.style.paddingTop = '1em';
-            suggestWrap.style.borderTop = '1px solid rgba(255,255,255,0.1)';
+    }
 
-            var suggestDesc = document.createElement('div');
-            suggestDesc.className = 'fieldDescription';
-            suggestDesc.style.marginBottom = '0.5em';
-            suggestDesc.innerText = schema.Path
-                ? 'Pick a saved connection matching this schema\'s System Type, then Suggest -- fills any still-empty role fields above from a live fetch. Existing values are never overwritten.'
-                : 'Save this schema with a Path filled in first, then come back here to suggest field mappings from a live fetch.';
-            suggestWrap.appendChild(suggestDesc);
+    // Test/Suggest lives right after the Endpoint path field -- it needs
+    // Path to build a real URL, and repeats the System Type as its own
+    // dropdown (a saved Connection matching schema.SystemType) so which
+    // system you're testing against is never ambiguous. Works against a
+    // not-yet-saved schema (passes the whole draft object as DraftSchema),
+    // so filling in Path + System type is enough to test -- the rest of
+    // the form doesn't need to be complete first.
+    function buildSchemaTestAndSuggestRow(view, schema) {
+        var wrap = document.createElement('div');
+        wrap.style.margin = '0.9em 0 1.2em 0';
+        wrap.style.padding = '0.8em';
+        wrap.style.border = '1px solid rgba(255,255,255,0.15)';
+        wrap.style.borderRadius = '6px';
 
-            if (schema.Path) {
-                var connSelect = document.createElement('select');
-                connections.filter(function (c) { return c.SystemType === schema.SystemType; }).forEach(function (c) {
-                    var opt = document.createElement('option');
-                    opt.value = c.Id;
-                    opt.innerText = c.DisplayLabel;
-                    connSelect.appendChild(opt);
-                });
-                suggestWrap.appendChild(connSelect);
-
-                var suggestBtn = document.createElement('span');
-                suggestBtn.className = 'rcsIconBtn';
-                suggestBtn.style.marginLeft = '0.6em';
-                suggestBtn.innerText = 'Suggest fields';
-                suggestBtn.addEventListener('click', function () {
-                    if (!connSelect.value) { Dashboard.alert('No matching saved connection for this System Type yet.'); return; }
-                    ensureFieldsDiscovered(connSelect.value, schema.Id, false).then(function (fields) {
-                        Object.keys(ROLE_HEURISTICS).forEach(function (role) {
-                            if (!schema[role]) {
-                                var guess = suggestRoleField(fields, ROLE_HEURISTICS[role]);
-                                if (guess) schema[role] = guess;
-                            }
-                        });
-                        renderSchemaForm(view);
-                    }).catch(function (err) {
-                        Dashboard.alert('Field discovery failed: ' + (err && err.message ? err.message : 'see server log'));
-                    });
-                });
-                suggestWrap.appendChild(suggestBtn);
-            }
-
-            container.appendChild(suggestWrap);
+        if (!schema.SystemType) {
+            wrap.innerHTML = '<div class="fieldDescription">Choose a System Type above first, then a matching connection appears here to test against.</div>';
+            return wrap;
         }
+
+        if (!schema.Path) {
+            wrap.innerHTML = '<div class="fieldDescription">Fill in the Endpoint path above, then test here -- no need to save first.</div>';
+            return wrap;
+        }
+
+        var matchingConns = connections.filter(function (c) { return c.SystemType === schema.SystemType; });
+
+        if (!matchingConns.length) {
+            wrap.innerHTML = '<div class="fieldDescription">No saved Connection with System Type "' + schema.SystemType + '" yet -- add one on the Connections tab first.</div>';
+            return wrap;
+        }
+
+        var label = document.createElement('label');
+        label.innerText = 'System: ';
+        label.style.marginRight = '0.4em';
+        wrap.appendChild(label);
+
+        var connSelect = document.createElement('select');
+        matchingConns.forEach(function (c) {
+            var opt = document.createElement('option');
+            opt.value = c.Id;
+            opt.innerText = c.DisplayLabel + ' (' + c.SystemType + ')';
+            connSelect.appendChild(opt);
+        });
+        wrap.appendChild(connSelect);
+
+        var suggestBtn = document.createElement('span');
+        suggestBtn.className = 'rcsIconBtn';
+        suggestBtn.style.marginLeft = '0.6em';
+        suggestBtn.innerText = 'Test endpoint & suggest fields';
+        suggestBtn.addEventListener('click', function () {
+            if (!connSelect.value) { Dashboard.alert('No matching connection selected.'); return; }
+            // Always sent as a draft -- works whether or not this schema
+            // has been saved yet, and always reflects the live in-progress
+            // values on screen rather than whatever was last saved.
+            ensureFieldsDiscovered(connSelect.value, schema.Id, true, schema).then(function (fields) {
+                // Reaching here at all means Path + credentials together
+                // produced a real response -- the authoritative test a
+                // bare connection can't do.
+                Object.keys(ROLE_HEURISTICS).forEach(function (role) {
+                    if (!schema[role]) {
+                        var guess = suggestRoleField(fields, ROLE_HEURISTICS[role]);
+                        if (guess) schema[role] = guess;
+                    }
+                });
+                renderSchemaForm(view);
+                Dashboard.alert('Endpoint reachable and returned ' + fields.length + ' discovered field(s). Any empty role fields were pre-filled with a best guess.');
+            }).catch(function (err) {
+                Dashboard.alert('Endpoint test failed: ' + (err && err.message ? err.message : 'see server log'));
+            });
+        });
+        wrap.appendChild(suggestBtn);
+
+        var desc = document.createElement('div');
+        desc.className = 'fieldDescription';
+        desc.style.marginTop = '0.4em';
+        desc.innerText = 'Fills any still-empty role fields below from a live fetch. Existing values are never overwritten.';
+        wrap.appendChild(desc);
+
+        return wrap;
     }
 
     function newSchema(view) {
@@ -2132,6 +2184,14 @@
         });
     }
 
+    function refreshKnownSystemTypesFromConnections() {
+        connections.forEach(function (c) {
+            if (c.SystemType && KNOWN_SYSTEM_TYPES.indexOf(c.SystemType) === -1) {
+                KNOWN_SYSTEM_TYPES.push(c.SystemType);
+            }
+        });
+    }
+
     function renderSystemTypeDatalist(view) {
         var list = view.querySelector('#knownSystemTypes');
         if (!list) return;
@@ -2174,7 +2234,15 @@
             if (!c.SystemType) {
                 c.SystemType = typeSelect.value;
             }
-            typeSelect.addEventListener('input', function (e) { c.SystemType = e.target.value; });
+            typeSelect.addEventListener('input', function (e) {
+                c.SystemType = e.target.value;
+                // A newly-typed System Type here must be immediately
+                // selectable on the Endpoint Schema tab's dropdown -- that's
+                // the only place new system types get defined.
+                refreshKnownSystemTypesFromConnections();
+                renderSystemTypeDatalist(view);
+                renderSchemaForm(view);
+            });
 
             var keyWrap = document.createElement('span');
             keyWrap.style.display = 'inline-flex';
@@ -2247,14 +2315,6 @@
     testBtn.dataset.busy = 'true';
     testStatus.innerText = 'Testing…';
 
-                var matching = schemasForSystemType(c.SystemType);
-                var schemaId = matching.length ? matching[0].Id : (schemas.length ? schemas[0].Id : '');
-
-                if (!schemaId) {
-                    testStatus.innerText = '❌ No endpoint schema available for system type "' + c.SystemType + '".';
-                    return;
-                }
-
                 ApiClient.ajax({
                     type: 'POST',
                     url: ApiClient.getUrl('ChannelSync/TestConnection'),
@@ -2262,8 +2322,7 @@
                         ConnectionId: c.Id,
                         BaseUrl: c.BaseUrl,
                         ApiKey: c.ApiKey,
-                        SystemType: c.SystemType,
-                        EndpointSchemaId: schemaId
+                        SystemType: c.SystemType
                     }),
                     contentType: 'application/json',
                     dataType: 'json'
@@ -2357,6 +2416,7 @@
             currentTree = results[3];
 
             refreshKnownSystemTypesFromSchemas();
+            refreshKnownSystemTypesFromConnections();
             renderSystemTypeDatalist(view);
 
             currentSchemaIndex = schemas.length ? 0 : -1;

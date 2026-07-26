@@ -11,13 +11,6 @@ namespace SyncChannel.Configuration
     using System;
     using System.Collections.Generic;
 
-    public enum EndpointAuthStyle
-    {
-        // apikey= query string param AND X-Api-Key header, both sent —
-        // matches the confirmed-working Radarr/Sonarr *arr-family shape.
-        ApiKeyQueryAndHeader
-    }
-
     public enum SchemaFieldType { String, Number, Bool, List, Date }
 
     // Which Emby channel-object shape this schema's items become. Each kind
@@ -142,7 +135,22 @@ namespace SyncChannel.Configuration
         // Appended to Connection.BaseUrl, e.g. "/api/v3/movie".
         public string Path { get; set; } = string.Empty;
 
-        public EndpointAuthStyle AuthStyle { get; set; } = EndpointAuthStyle.ApiKeyQueryAndHeader;
+        // Replaces the old fixed AuthStyle enum, which was never actually
+        // read by HttpFetchProvider (the query param name and X-Api-Key
+        // header were hardcoded regardless of its value — confirmed dead
+        // config). Not every API uses the same key parameter name — Emby
+        // itself uses "api_key", not "apikey" — so this is schema-level,
+        // explicit, and field-driven rather than a fixed style choice.
+        public string ApiKeyParamName { get; set; } = "apikey";
+
+        // Additional static query-string parameters always appended, e.g.
+        // Limit=25. Plain literal strings, not field mappings — for
+        // anything that should reflect a fetched value, use the role
+        // fields or ProviderIdFields instead. Deliberately query-string
+        // based rather than custom headers, per explicit preference:
+        // fields are more visible/obvious in the schema editor than a
+        // hidden header would be.
+        public Dictionary<string, string> StaticQueryParams { get; set; } = new Dictionary<string, string>();
 
         // Dotted paths resolved against each array element to build a
         // FetchedItem generically. IdentityField is the only required one —

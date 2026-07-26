@@ -130,7 +130,7 @@
             SystemType = "radarr",
             ObjectKind = ChannelObjectKind.FlatMedia,
             Path = "/api/v3/movie",
-            AuthStyle = EndpointAuthStyle.ApiKeyQueryAndHeader,
+            ApiKeyParamName = "apikey",
             IdentityField = "titleSlug",
             TitleField = "title",
             OriginalTitleField = "originalTitle",
@@ -184,7 +184,7 @@
             ObjectKind = ChannelObjectKind.Series,
             Path = "/api/v3/series",
             // ...unchanged from here down...
-            AuthStyle = EndpointAuthStyle.ApiKeyQueryAndHeader,
+            ApiKeyParamName = "apikey",
             IdentityField = "titleSlug",
             TitleField = "title",
             OriginalTitleField = "title",
