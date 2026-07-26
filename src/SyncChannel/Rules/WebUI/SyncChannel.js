@@ -1303,6 +1303,353 @@
         return c ? c.DisplayLabel : '(unknown connection)';
     }
 
+    // ===================================================================
+    // Endpoint Schema editor
+    // ===================================================================
+    var currentSchemaIndex = -1;
+
+    var OBJECT_KINDS = [
+        { value: 'FlatMedia', label: 'Flat Media (single playable item, e.g. Movie)' },
+        { value: 'Series', label: 'Series (Series -> Season -> Episode)' },
+        { value: 'MusicArtistAlbum', label: 'Music (Artist -> Album -> Song)' },
+        { value: 'PhotoAlbum', label: 'Photo Album (Album -> Photo)' },
+        { value: 'GenericContainer', label: 'Generic Container (N folders -> leaf)' }
+    ];
+
+    var LEAF_MEDIA_TYPES = ['Video', 'Audio'];
+    var LEAF_CONTENT_TYPES = ['Clip', 'Podcast', 'Trailer', 'Movie', 'Episode', 'Song', 'MovieExtra', 'TvExtra', 'GameExtra', 'MusicVideo'];
+
+    // Low-risk, override-always suggestions -- never a silent decision, just
+    // a pre-filled default the admin confirms or replaces. Checked in
+    // priority order per role; first discovered field matching any pattern
+    // wins. Hardcoded-with-override, not itself admin-configurable, since a
+    // wrong guess costs one dropdown click, not a broken schema.
+    var ROLE_HEURISTICS = {
+        IdentityField: [/slug/i, /^id$/i, /identifier/i, /guid/i],
+        TitleField: [/^title$/i, /^name$/i, /artistname/i],
+        OriginalTitleField: [/originaltitle/i],
+        YearField: [/^year$/i, /releaseyear/i],
+        OverviewField: [/overview/i, /summary/i, /description/i],
+        PosterUrlField: [/poster/i, /cover/i, /^image/i],
+        ArtistField: [/^artist/i],
+        AlbumArtistField: [/albumartist/i],
+        AlbumField: [/^album/i],
+        MediaFileUrlField: [/^url$/i, /fileurl/i, /mediaurl/i, /^path$/i]
+    };
+
+    function suggestRoleField(fields, patterns) {
+        for (var p = 0; p < patterns.length; p++) {
+            var match = fields.filter(function (f) {
+                return patterns[p].test(f.JsonPath) || patterns[p].test(f.DisplayName || '');
+            })[0];
+            if (match) return match.JsonPath;
+        }
+        return '';
+    }
+
+    function newEmptySchema() {
+        return {
+            Id: newId(),
+            DisplayName: 'New Schema',
+            SystemType: '',
+            IsBuiltIn: false,
+            ObjectKind: 'FlatMedia',
+            LeafMediaType: 'Video',
+            LeafContentType: 'Movie',
+            ContainerLevelCount: 0,
+            ContainerLevelNames: [],
+            Path: '',
+            AuthStyle: 'ApiKeyQueryAndHeader',
+            IdentityField: '',
+            TitleField: '',
+            OriginalTitleField: '',
+            YearField: '',
+            OverviewField: '',
+            PosterUrlField: '',
+            ArtistField: '',
+            AlbumArtistField: '',
+            AlbumField: '',
+            MediaFileUrlField: '',
+            ProviderIdFields: {},
+            Fields: [],
+            DetailUrlFormat: ''
+        };
+    }
+
+    function renderSchemaSelect(view) {
+        var select = view.querySelector('#esSchemaSelect');
+        select.innerHTML = '';
+
+        schemas.forEach(function (s, idx) {
+            var opt = document.createElement('option');
+            opt.value = idx;
+            opt.innerText = (s.DisplayName || '(unnamed)') + (s.IsBuiltIn ? ' [built-in]' : '');
+            select.appendChild(opt);
+        });
+
+        if (currentSchemaIndex < 0 && schemas.length) currentSchemaIndex = 0;
+        if (currentSchemaIndex >= schemas.length) currentSchemaIndex = schemas.length - 1;
+        select.value = currentSchemaIndex;
+
+        select.onchange = function () {
+            currentSchemaIndex = parseInt(select.value, 10);
+            renderSchemaForm(view);
+        };
+    }
+
+    function esLabeledRow(labelText, inputEl, description) {
+        var row = document.createElement('div');
+        row.className = 'esFormRow';
+        row.style.marginBottom = '0.9em';
+
+        var label = document.createElement('label');
+        label.innerText = labelText;
+        label.style.display = 'block';
+        label.style.marginBottom = '0.2em';
+        row.appendChild(label);
+
+        row.appendChild(inputEl);
+
+        if (description) {
+            var desc = document.createElement('div');
+            desc.className = 'fieldDescription';
+            desc.style.marginTop = '0.2em';
+            desc.innerText = description;
+            row.appendChild(desc);
+        }
+
+        return row;
+    }
+
+    function esTextInput(value, disabled, onChange) {
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.style.width = '100%';
+        input.value = value || '';
+        input.disabled = !!disabled;
+        input.addEventListener('input', function (e) { onChange(e.target.value); });
+        return input;
+    }
+
+    function esSelectInput(options, value, disabled, onChange) {
+        var select = document.createElement('select');
+        select.disabled = !!disabled;
+        options.forEach(function (o) {
+            var opt = document.createElement('option');
+            opt.value = o.value;
+            opt.innerText = o.label;
+            if (o.value === value) opt.selected = true;
+            select.appendChild(opt);
+        });
+        select.addEventListener('change', function (e) { onChange(e.target.value); });
+        return select;
+    }
+
+    function esNumberInput(value, disabled, onChange) {
+        var input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.style.width = '6em';
+        input.value = (value === null || value === undefined) ? 0 : value;
+        input.disabled = !!disabled;
+        input.addEventListener('input', function (e) {
+            var n = parseInt(e.target.value, 10);
+            onChange(isNaN(n) ? 0 : n);
+        });
+        return input;
+    }
+
+    function renderSchemaForm(view) {
+        var container = view.querySelector('#esForm');
+        container.innerHTML = '';
+
+        if (currentSchemaIndex < 0 || !schemas[currentSchemaIndex]) {
+            container.innerHTML = '<div class="fieldDescription">No schema selected -- use + New to create one.</div>';
+            return;
+        }
+
+        var schema = schemas[currentSchemaIndex];
+        var locked = !!schema.IsBuiltIn;
+
+        if (locked) {
+            var lockNotice = document.createElement('div');
+            lockNotice.className = 'fieldDescription';
+            lockNotice.style.marginBottom = '0.8em';
+            lockNotice.innerText = 'This is a built-in endpoint schema and is read-only. Use Duplicate above to make an editable copy.';
+            container.appendChild(lockNotice);
+        }
+
+        container.appendChild(esLabeledRow('Display name', esTextInput(schema.DisplayName, locked, function (v) { schema.DisplayName = v; renderSchemaSelect(view); })));
+
+        container.appendChild(esLabeledRow('System type', esTextInput(schema.SystemType, locked, function (v) { schema.SystemType = v; }),
+            'Must match a Connection\'s System Type for a Fetch to be allowed to pair them (see the Connections tab).'));
+
+        container.appendChild(esLabeledRow('Endpoint path', esTextInput(schema.Path, locked, function (v) { schema.Path = v; }),
+            'Appended to the connection\'s base URL, e.g. "/api/v3/movie".'));
+
+        container.appendChild(esLabeledRow('Object kind', esSelectInput(OBJECT_KINDS, schema.ObjectKind, locked, function (v) {
+            schema.ObjectKind = v;
+            renderSchemaForm(view); // re-render to show/hide kind-specific fields
+        }), 'Which Emby channel shape this schema\'s items become. Fixed choices -- not every combination of container/leaf is meaningful in Emby.'));
+
+        // ---- Always-present role fields ----
+        container.appendChild(esLabeledRow('Identity field', esTextInput(schema.IdentityField, locked, function (v) { schema.IdentityField = v; }),
+            'Required. Dotted JSON path to a stable, unique id -- items without one are dropped.'));
+        container.appendChild(esLabeledRow('Title field', esTextInput(schema.TitleField, locked, function (v) { schema.TitleField = v; })));
+        container.appendChild(esLabeledRow('Original title field', esTextInput(schema.OriginalTitleField, locked, function (v) { schema.OriginalTitleField = v; })));
+        container.appendChild(esLabeledRow('Year field', esTextInput(schema.YearField, locked, function (v) { schema.YearField = v; })));
+        container.appendChild(esLabeledRow('Overview field', esTextInput(schema.OverviewField, locked, function (v) { schema.OverviewField = v; })));
+        container.appendChild(esLabeledRow('Poster URL field', esTextInput(schema.PosterUrlField, locked, function (v) { schema.PosterUrlField = v; })));
+
+        // ---- Kind-specific fields ----
+        if (schema.ObjectKind === 'MusicArtistAlbum') {
+            container.appendChild(esLabeledRow('Artist field', esTextInput(schema.ArtistField, locked, function (v) { schema.ArtistField = v; })));
+            container.appendChild(esLabeledRow('Album artist field', esTextInput(schema.AlbumArtistField, locked, function (v) { schema.AlbumArtistField = v; })));
+        }
+
+        if (schema.ObjectKind === 'PhotoAlbum') {
+            container.appendChild(esLabeledRow('Media file URL field', esTextInput(schema.MediaFileUrlField, locked, function (v) { schema.MediaFileUrlField = v; }),
+                'The actual image file URL -- distinct from Poster URL, which is a thumbnail.'));
+        }
+
+        if (schema.ObjectKind === 'FlatMedia' || schema.ObjectKind === 'GenericContainer') {
+            container.appendChild(esLabeledRow('Leaf media type', esSelectInput(
+                LEAF_MEDIA_TYPES.map(function (t) { return { value: t, label: t }; }),
+                schema.LeafMediaType, locked, function (v) { schema.LeafMediaType = v; })));
+            container.appendChild(esLabeledRow('Leaf content type', esSelectInput(
+                LEAF_CONTENT_TYPES.map(function (t) { return { value: t, label: t }; }),
+                schema.LeafContentType, locked, function (v) { schema.LeafContentType = v; })));
+        }
+
+        if (schema.ObjectKind === 'GenericContainer') {
+            container.appendChild(esLabeledRow('Container level count', esNumberInput(schema.ContainerLevelCount, locked, function (v) {
+                schema.ContainerLevelCount = v;
+                renderSchemaForm(view); // level-name inputs need to match the new count
+            }), 'How many synthetic folder levels sit between this item and its playable leaf. 0 is valid.'));
+
+            if (!schema.ContainerLevelNames) schema.ContainerLevelNames = [];
+
+            for (var lvl = 0; lvl < schema.ContainerLevelCount; lvl++) {
+                (function (levelIndex) {
+                    var current = schema.ContainerLevelNames[levelIndex] || '';
+                    container.appendChild(esLabeledRow('Level ' + (levelIndex + 1) + ' name', esTextInput(current, locked, function (v) {
+                        schema.ContainerLevelNames[levelIndex] = v;
+                    }), 'Display label only -- every level is a plain Container folder in Emby.'));
+                })(lvl);
+            }
+        }
+
+        // ---- Field-role suggestion (existing, saved schemas only) ----
+        if (!locked) {
+            var suggestWrap = document.createElement('div');
+            suggestWrap.style.marginTop = '1em';
+            suggestWrap.style.paddingTop = '1em';
+            suggestWrap.style.borderTop = '1px solid rgba(255,255,255,0.1)';
+
+            var suggestDesc = document.createElement('div');
+            suggestDesc.className = 'fieldDescription';
+            suggestDesc.style.marginBottom = '0.5em';
+            suggestDesc.innerText = schema.Path
+                ? 'Pick a saved connection matching this schema\'s System Type, then Suggest -- fills any still-empty role fields above from a live fetch. Existing values are never overwritten.'
+                : 'Save this schema with a Path filled in first, then come back here to suggest field mappings from a live fetch.';
+            suggestWrap.appendChild(suggestDesc);
+
+            if (schema.Path) {
+                var connSelect = document.createElement('select');
+                connections.filter(function (c) { return c.SystemType === schema.SystemType; }).forEach(function (c) {
+                    var opt = document.createElement('option');
+                    opt.value = c.Id;
+                    opt.innerText = c.DisplayLabel;
+                    connSelect.appendChild(opt);
+                });
+                suggestWrap.appendChild(connSelect);
+
+                var suggestBtn = document.createElement('span');
+                suggestBtn.className = 'rcsIconBtn';
+                suggestBtn.style.marginLeft = '0.6em';
+                suggestBtn.innerText = 'Suggest fields';
+                suggestBtn.addEventListener('click', function () {
+                    if (!connSelect.value) { Dashboard.alert('No matching saved connection for this System Type yet.'); return; }
+                    ensureFieldsDiscovered(connSelect.value, schema.Id, false).then(function (fields) {
+                        Object.keys(ROLE_HEURISTICS).forEach(function (role) {
+                            if (!schema[role]) {
+                                var guess = suggestRoleField(fields, ROLE_HEURISTICS[role]);
+                                if (guess) schema[role] = guess;
+                            }
+                        });
+                        renderSchemaForm(view);
+                    }).catch(function (err) {
+                        Dashboard.alert('Field discovery failed: ' + (err && err.message ? err.message : 'see server log'));
+                    });
+                });
+                suggestWrap.appendChild(suggestBtn);
+            }
+
+            container.appendChild(suggestWrap);
+        }
+    }
+
+    function newSchema(view) {
+        var fresh = newEmptySchema();
+        schemas.push(fresh);
+        currentSchemaIndex = schemas.length - 1;
+        renderSchemaSelect(view);
+        renderSchemaForm(view);
+    }
+
+    function duplicateSchema(view) {
+        if (currentSchemaIndex < 0 || !schemas[currentSchemaIndex]) { Dashboard.alert('No schema selected to duplicate.'); return; }
+        var clone = JSON.parse(JSON.stringify(schemas[currentSchemaIndex]));
+        clone.Id = newId();
+        clone.DisplayName = clone.DisplayName + ' (copy)';
+        clone.IsBuiltIn = false;
+        schemas.push(clone);
+        currentSchemaIndex = schemas.length - 1;
+        renderSchemaSelect(view);
+        renderSchemaForm(view);
+    }
+
+    function deleteSchema(view) {
+        var schema = schemas[currentSchemaIndex];
+        if (!schema) return;
+        if (schema.IsBuiltIn) { Dashboard.alert('Built-in endpoint schemas are read-only and cannot be deleted.'); return; }
+        if (!confirm('Delete schema "' + schema.DisplayName + '"? Any fetch still referencing it will be blocked from saving until reassigned.')) return;
+
+        schemas.splice(currentSchemaIndex, 1);
+        currentSchemaIndex = schemas.length ? 0 : -1;
+        renderSchemaSelect(view);
+        renderSchemaForm(view);
+    }
+
+    function saveEndpointSchemas(view) {
+        var status = view.querySelector('#esSaveStatus');
+        status.innerText = 'Saving...';
+
+        ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('ChannelSync/EndpointSchemas'),
+            data: JSON.stringify({ Payload: { Schemas: schemas } }),
+            contentType: 'application/json',
+            dataType: 'json'
+        }).then(function () {
+            status.innerText = 'Saved.';
+            setTimeout(function () { if (status.innerText === 'Saved.') status.innerText = ''; }, 3000);
+            // Server strips/re-adds built-ins on every save and re-seeds on
+            // next load -- re-fetch so any built-in edits we sent are
+            // discarded client-side too, keeping the dropdown honest.
+            ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/EndpointSchemas'), dataType: 'json' }).then(function (result) {
+                schemas = (result && result.Schemas) || [];
+                refreshKnownSystemTypesFromSchemas();
+                renderSystemTypeDatalist(view);
+                renderSchemaSelect(view);
+                renderSchemaForm(view);
+                renderConnectionAndSchemaSelects(view);
+            });
+        }).catch(function () {
+            status.innerText = 'Save failed -- see server log.';
+        });
+    }
+
     function schemaLabel(id) {
         var s = schemas.filter(function (x) { return x.Id === id; })[0];
         return s ? s.DisplayName : '(unknown endpoint)';
@@ -1769,7 +2116,32 @@
     // ===================================================================
     // Connections tab
     // ===================================================================
+    // Seed suggestions only, not a closed set -- SystemType is free text
+    // (EndpointSchema.SystemType is deliberately not a fixed enum, so a
+    // user-authored schema for any new source doesn't need a code change).
+    // Grown at render time with whatever SystemType values already exist
+    // across saved schemas, so a custom one you've already typed once
+    // reappears as a suggestion everywhere else too.
     var KNOWN_SYSTEM_TYPES = ['radarr', 'sonarr'];
+
+    function refreshKnownSystemTypesFromSchemas() {
+        schemas.forEach(function (s) {
+            if (s.SystemType && KNOWN_SYSTEM_TYPES.indexOf(s.SystemType) === -1) {
+                KNOWN_SYSTEM_TYPES.push(s.SystemType);
+            }
+        });
+    }
+
+    function renderSystemTypeDatalist(view) {
+        var list = view.querySelector('#knownSystemTypes');
+        if (!list) return;
+        list.innerHTML = '';
+        KNOWN_SYSTEM_TYPES.forEach(function (t) {
+            var opt = document.createElement('option');
+            opt.value = t;
+            list.appendChild(opt);
+        });
+    }
 
     function renderConnectionsTab(view) {
         var list = view.querySelector('#connList');
@@ -1791,19 +2163,18 @@
             urlInput.placeholder = 'http://127.0.0.1:7878';
             urlInput.addEventListener('input', function (e) { c.BaseUrl = e.target.value; });
 
-            var typeSelect = document.createElement('select');
-            KNOWN_SYSTEM_TYPES.forEach(function (t) {
-                var o = document.createElement('option');
-                o.value = t;
-                o.innerText = t;
-                if (c.SystemType === t) o.selected = true;
-                typeSelect.appendChild(o);
-            });
+            // Free text with a datalist of known values, not a closed
+            // dropdown -- must be able to match any custom EndpointSchema's
+            // SystemType, not just the two built-ins.
+            var typeSelect = document.createElement('input');
+            typeSelect.setAttribute('list', 'knownSystemTypes');
+            typeSelect.style.width = '10em';
+            typeSelect.placeholder = 'radarr';
+            typeSelect.value = c.SystemType || KNOWN_SYSTEM_TYPES[0];
             if (!c.SystemType) {
-                c.SystemType = KNOWN_SYSTEM_TYPES[0];
-                typeSelect.value = c.SystemType;
+                c.SystemType = typeSelect.value;
             }
-            typeSelect.addEventListener('change', function (e) { c.SystemType = e.target.value; });
+            typeSelect.addEventListener('input', function (e) { c.SystemType = e.target.value; });
 
             var keyWrap = document.createElement('span');
             keyWrap.style.display = 'inline-flex';
@@ -1985,6 +2356,13 @@
             ruleSetsFile = (results[2] && results[2].RuleSets) ? results[2] : { RuleSets: [] };
             currentTree = results[3];
 
+            refreshKnownSystemTypesFromSchemas();
+            renderSystemTypeDatalist(view);
+
+            currentSchemaIndex = schemas.length ? 0 : -1;
+            renderSchemaSelect(view);
+            renderSchemaForm(view);
+
             renderConnectionAndSchemaSelects(view);
 
             var matching = ruleSetsForCurrentSchema(view);
@@ -2027,6 +2405,11 @@
                 renderConnectionsTab(view);
             });
             view.querySelector('#connSaveBtn').addEventListener('click', function () { saveConnections(view); });
+
+            view.querySelector('#esNewSchema').addEventListener('click', function () { newSchema(view); });
+            view.querySelector('#esDuplicateSchema').addEventListener('click', function () { duplicateSchema(view); });
+            view.querySelector('#esDeleteSchema').addEventListener('click', function () { deleteSchema(view); });
+            view.querySelector('#esSaveBtn').addEventListener('click', function () { saveEndpointSchemas(view); });
 
             var jsonToggle = view.querySelector('#rcsToggleJson');
             var jsonPanel = view.querySelector('#rcsRuleJson');

@@ -236,8 +236,9 @@
 			<div is="emby-tabs" data-index="0" class="tabs-viewmenubar emby-tabs padded-left padded-right focusable scrollX">
 				<div class="tabs-viewmenubar-slider emby-tabs-slider nohoverfocus scrollSliderX">
 					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button emby-tab-button-active" data-index="0" data-tab="connections">1. Connections</a>
-					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="1" data-tab="ruleSets">2. Rule Sets</a>
-					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="2" data-tab="tree">3. Folder Tree</a>
+					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="1" data-tab="schemas">2. Endpoint Schemas</a>
+					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="2" data-tab="ruleSets">3. Rule Sets</a>
+					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="3" data-tab="tree">4. Folder Tree</a>
 				</div>
 			</div>
 
@@ -253,6 +254,30 @@
 					<button is="emby-button" type="button" id="connAddBtn" class="raised">+ Add Connection</button>
 					<button is="emby-button" type="button" id="connSaveBtn" class="raised button-submit">Save Connections</button>
 					<span id="connStatus"></span>
+				</div>
+
+				<datalist id="knownSystemTypes"></datalist>
+			</div>
+
+			<!-- ================= Endpoint Schemas tab ================= -->
+			<div id="tab-schemas" class="mcsTab">
+				<div class="fieldDescription" style="margin-bottom: 1em;">
+					An Endpoint Schema defines how one HTTP GET endpoint's JSON response maps into a channel item &mdash; which field is the title, which shape it becomes (Movie, Series, Music, Photo, or a generic folder tree), and so on. Radarr/Sonarr ship built-in (locked, read-only) &mdash; Duplicate one to start from a working example, or create a new schema from scratch to support any other REST source.
+				</div>
+
+				<div id="esBar" style="display:flex; align-items:center; gap:0.8em; flex-wrap:wrap; margin-bottom:1em;">
+					<label for="esSchemaSelect">Schema:</label>
+					<select id="esSchemaSelect"></select>
+					<span class="rcsIconBtn" id="esNewSchema" title="Create a new, empty endpoint schema">+ New</span>
+					<span class="rcsIconBtn" id="esDuplicateSchema" title="Duplicate the currently selected schema">Duplicate</span>
+					<span class="rcsIconBtn" id="esDeleteSchema" title="Delete the currently selected schema">Delete</span>
+				</div>
+
+				<div id="esForm"></div>
+
+				<div style="margin-top: 1em; display:flex; gap:0.5em; align-items:center;">
+					<button is="emby-button" type="button" id="esSaveBtn" class="raised button-submit">Save Endpoint Schemas</button>
+					<span id="esSaveStatus"></span>
 				</div>
 			</div>
 
