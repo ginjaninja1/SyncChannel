@@ -42,6 +42,24 @@ namespace SyncChannel.Fetching
         public int? Year { get; set; }
         public string Overview { get; set; } = string.Empty;
         public string PosterUrl { get; set; }
+
+        // MusicArtistAlbum kind only — resolved from EndpointSchema's
+        // ArtistField/AlbumArtistField/AlbumField. Flow through to
+        // ChannelItemInfo.Artists/AlbumArtists/Album in SyncFolderChannel,
+        // read directly off ChannelItemInfo by Emby's ChannelManager
+        // (confirmed via ILSpy — independent of parent folder's runtime
+        // type, since MusicArtist/MusicAlbum FolderTypes don't construct
+        // real typed classes).
+        public string Artist { get; set; } = string.Empty;
+        public string AlbumArtist { get; set; } = string.Empty;
+        public string Album { get; set; } = string.Empty;
+
+        // PhotoAlbum kind only — the actual image file URL, resolved from
+        // EndpointSchema.MediaFileUrlField. Distinct from PosterUrl (a
+        // thumbnail set via ImageUrl) — this becomes the Photo BaseItem's
+        // MediaSourceInfo.Path (confirmed via ILSpy).
+        public string MediaFileUrl { get; set; } = string.Empty;
+
         public Dictionary<string, string> ProviderIds { get; set; } = new Dictionary<string, string>();
     }
 

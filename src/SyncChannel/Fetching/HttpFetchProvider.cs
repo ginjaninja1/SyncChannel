@@ -118,7 +118,11 @@ namespace SyncChannel.Fetching
                             OriginalTitle = ResolveString(el, schema.OriginalTitleField),
                             Overview = ResolveString(el, schema.OverviewField),
                             Year = ResolveInt(el, schema.YearField),
-                            PosterUrl = ResolvePoster(el, schema.PosterUrlField)
+                            PosterUrl = ResolvePoster(el, schema.PosterUrlField),
+                            Artist = ResolveString(el, schema.ArtistField),
+                            AlbumArtist = ResolveString(el, schema.AlbumArtistField),
+                            Album = ResolveString(el, schema.AlbumField),
+                            MediaFileUrl = ResolveString(el, schema.MediaFileUrlField)
                         };
 
                         foreach (var kvp in schema.ProviderIdFields)

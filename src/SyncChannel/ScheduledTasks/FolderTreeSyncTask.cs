@@ -252,7 +252,7 @@ namespace SyncChannel.ScheduledTasks
                 }
 
                 anySucceeded = true;
-                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, schema.ObjectKind, priorByStableId)));
+                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, schema, priorByStableId)));
             }
 
             if (!anyAttempted)
@@ -279,7 +279,7 @@ namespace SyncChannel.ScheduledTasks
         private static CachedChannelItem ToCache(
             FetchedItem item,
             string fetchInstanceId,
-            ChannelObjectKind kind,
+            EndpointSchema schema,
             IReadOnlyDictionary<string, CachedChannelItem> priorByStableId)
         {
             var firstSeenUtc = priorByStableId.TryGetValue(item.StableId, out var prior)
@@ -290,13 +290,21 @@ namespace SyncChannel.ScheduledTasks
             {
                 ProviderKey = fetchInstanceId,
                 StableId = item.StableId,
-                ObjectKind = kind,
+                ObjectKind = schema.ObjectKind,
+                LeafMediaType = schema.LeafMediaType,
+                LeafContentType = schema.LeafContentType,
+                ContainerLevelCount = schema.ContainerLevelCount,
+                ContainerLevelNames = schema.ContainerLevelNames,
                 FirstSeenUtc = firstSeenUtc,
                 Title = item.Title,
                 OriginalTitle = item.OriginalTitle,
                 Year = item.Year,
                 Overview = item.Overview,
                 PosterUrl = item.PosterUrl,
+                Artist = item.Artist,
+                AlbumArtist = item.AlbumArtist,
+                Album = item.Album,
+                MediaFileUrl = item.MediaFileUrl,
                 ProviderIds = item.ProviderIds
             };
         }

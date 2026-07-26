@@ -1,10 +1,11 @@
 ﻿// The generalization that lets a brand-new REST source (Sonarr, or anything
 // else) be supported as data, not code. An EndpointSchema names one HTTP GET
-// path plus how to read identity/display fields and which fields the rule
-// builder is allowed to filter on. Radarr and Sonarr ship as two seeded
-// EndpointSchema rows (see EndpointSchemaStore.SeedBuiltIns) rather than as
-// their own IFetchProvider classes — HttpFetchProvider is generic against
-// any schema.
+// path plus how to read identity/display fields, which fields the rule
+// builder is allowed to filter on, and — as of this version — which Emby
+// channel-object shape the resulting items become. Radarr and Sonarr ship
+// as two seeded EndpointSchema rows (see EndpointSchemaStore.SeedBuiltIns)
+// rather than as their own IFetchProvider classes — HttpFetchProvider is
+// generic against any schema.
 namespace SyncChannel.Configuration
 {
     using System;
@@ -19,15 +20,69 @@ namespace SyncChannel.Configuration
 
     public enum SchemaFieldType { String, Number, Bool, List, Date }
 
-    // Which kind of Emby channel object this schema's items should become.
-    // FlatMedia -> a single playable ChannelItemInfo (Type=Media), the
-    // existing Radarr-movie shape. Series -> a ChannelFolderType.Series
-    // folder, with a synthesized Season 1 / Episode 1 underneath pointing
-    // at the shared stub video (see SyncFolderChannel). No implicit
-    // default — every schema, built-in or user-authored, states this
-    // explicitly, since guessing wrong here is exactly what caused Sonarr
-    // items to be misidentified as movies.
-    public enum ChannelObjectKind { FlatMedia, Series }
+    // Which Emby channel-object shape this schema's items become. Each kind
+    // maps to a confirmed-via-ILSpy-and-live-test construction path in
+    // Emby's ChannelManager.GetChannelItemEntity — see Evidence.md. No
+    // implicit default — every schema, built-in or user-authored, states
+    // this explicitly, since guessing wrong here is exactly what caused
+    // Sonarr items to be misidentified as movies.
+    //
+    //   FlatMedia       -> single playable ChannelItemInfo (Type=Media).
+    //                      LeafMediaType/LeafContentType pick the exact
+    //                      Emby BaseItem (Movie, or any standalone clip/
+    //                      trailer/podcast/extra type). No container.
+    //
+    //   Series          -> ChannelFolderType.Series real container, with a
+    //                      synthesized Season 1 / Episode 1 underneath
+    //                      pointing at the shared stub video. Existing
+    //                      behavior, unchanged.
+    //
+    //   MusicArtistAlbum -> two synthetic Folder-typed containers (Emby
+    //                      does NOT construct real MusicArtist/MusicAlbum
+    //                      classes for these FolderTypes — confirmed via
+    //                      ILSpy: they fall through to plain Folder, same
+    //                      as Container) with an Audio leaf underneath.
+    //                      Artist/Album tagging still applies correctly to
+    //                      the leaf via ArtistField/AlbumArtistField/
+    //                      AlbumField, independent of the parent's actual
+    //                      runtime type.
+    //
+    //   PhotoAlbum      -> ChannelFolderType.PhotoAlbum real container
+    //                      (Emby DOES construct a real PhotoAlbum class for
+    //                      this one) with a single level of Photo leaves
+    //                      underneath — no synthetic middle layer needed.
+    //                      Leaf uses MediaType=Video, ContentType=Trailer;
+    //                      confirmed via live test (see Evidence.md) that
+    //                      this specific, semantically-odd combination is
+    //                      what Emby's construction switch actually maps to
+    //                      a Photo object — do not "fix" this back to
+    //                      something that looks more sensible.
+    //
+    //   GenericContainer -> ContainerLevelCount synthetic Container-typed
+    //                      folders (no real BaseItem subclass, no metadata
+    //                      scraping — same as admin folder-tree nodes today)
+    //                      with a single configurable leaf underneath. The
+    //                      fallback shape for anything that isn't Movie/TV/
+    //                      Music/Photo-like.
+    public enum ChannelObjectKind { FlatMedia, Series, MusicArtistAlbum, PhotoAlbum, GenericContainer }
+
+    // Mirrors MediaBrowser.Model.Channels.ChannelMediaType. Only Video and
+    // Audio are meaningful choices for a schema-authored leaf today — Photo
+    // as a MediaType exists but is NOT how Emby actually constructs Photo
+    // objects (see PhotoAlbum kind above), so it's deliberately not offered
+    // as a leaf-media-type choice to avoid re-introducing that confusion.
+    public enum LeafMediaType { Video, Audio }
+
+    // Mirrors MediaBrowser.Model.Channels.ChannelMediaContentType exactly
+    // (confirmed via ILSpy — full enum, all 10 members). Only the subset
+    // that pairs sensibly with LeafMediaType.Video is offered per-kind by
+    // the UI; stored as the full enum here so the mapping stays data, not
+    // code, if Emby's construction switch is ever revisited.
+    public enum LeafContentType
+    {
+        Clip, Podcast, Trailer, Movie, Episode, Song,
+        MovieExtra, TvExtra, GameExtra, MusicVideo
+    }
 
     public class SchemaField
     {
@@ -57,15 +112,32 @@ namespace SyncChannel.Configuration
         // code change.
         public string SystemType { get; set; } = string.Empty;
 
-        // Marks Radarr/Sonarr's built-in seeds so the UI can label them
-        // "built-in" and the store can re-seed them if ever deleted. Not
-        // otherwise treated specially by fetch/evaluation code — a
-        // user-authored schema works identically.
+        // Marks built-in seeds so the UI can label them "built-in" (locked,
+        // 🔒 glyph — same treatment as built-in RuleSets) and the store can
+        // re-seed them if ever deleted. Not otherwise treated specially by
+        // fetch/evaluation code — a user-authored schema works identically.
         public bool IsBuiltIn { get; set; }
 
         // Which Emby channel object this schema's items become. See
         // ChannelObjectKind above.
         public ChannelObjectKind ObjectKind { get; set; }
+
+        // FlatMedia / MusicArtistAlbum's leaf / GenericContainer's leaf only.
+        // Ignored for Series (fixed Video/Episode by construction) and
+        // PhotoAlbum (fixed Video/Trailer by construction — see comment on
+        // ChannelObjectKind.PhotoAlbum).
+        public LeafMediaType LeafMediaType { get; set; } = LeafMediaType.Video;
+        public LeafContentType LeafContentType { get; set; } = LeafContentType.Movie;
+
+        // GenericContainer only — how many synthetic Container-typed folder
+        // levels sit between the schema's own item and its playable leaf.
+        // 0 is valid (flat list of playable leaves grouped only by whatever
+        // admin folder tree they're placed under). Purely cosmetic labels
+        // for each level (e.g. "Show", "Collection") — Container has no
+        // real sub-typing in Emby, so these are display names only, not
+        // separate FolderTypes.
+        public int ContainerLevelCount { get; set; }
+        public List<string> ContainerLevelNames { get; set; } = new List<string>();
 
         // Appended to Connection.BaseUrl, e.g. "/api/v3/movie".
         public string Path { get; set; } = string.Empty;
@@ -82,6 +154,22 @@ namespace SyncChannel.Configuration
         public string YearField { get; set; } = string.Empty;
         public string OverviewField { get; set; } = string.Empty;
         public string PosterUrlField { get; set; } = string.Empty;
+
+        // MusicArtistAlbum only — resolved onto the Audio leaf's
+        // IHasArtist/IHasAlbumArtist/IHasMusicAlbum interfaces in
+        // GetChannelItemEntity (confirmed via ILSpy — these are read
+        // directly off ChannelItemInfo.Artists/AlbumArtists/Album
+        // independent of the parent folder's actual runtime type).
+        public string ArtistField { get; set; } = string.Empty;
+        public string AlbumArtistField { get; set; } = string.Empty;
+        public string AlbumField { get; set; } = string.Empty;
+
+        // PhotoAlbum only — the actual image file URL, distinct from
+        // PosterUrlField (which is a thumbnail/cover, set via ImageUrl).
+        // Confirmed via ILSpy: Photo.Path is set from
+        // info.MediaSources.FirstOrDefault()?.Path, not from ImageUrl —
+        // this field is what gets turned into that MediaSourceInfo.
+        public string MediaFileUrlField { get; set; } = string.Empty;
 
         // Extra dotted paths, beyond the display fields above, surfaced as
         // ProviderIds on the resulting channel item — e.g. Radarr's tmdbId

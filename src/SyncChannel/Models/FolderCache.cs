@@ -26,11 +26,36 @@ namespace SyncChannel.Models
         // it (FolderTreeSyncTask.ToCache) through to SyncFolderChannel.
         public ChannelObjectKind ObjectKind { get; set; }
 
+        // Copied from EndpointSchema at ToCache time, alongside ObjectKind,
+        // so SyncFolderChannel can construct the right ChannelItemInfo
+        // without a schema lookup at browse time. FlatMedia/MusicArtistAlbum/
+        // GenericContainer leaves only — ignored for Series/PhotoAlbum,
+        // which have fixed leaf shapes by construction (see EndpointSchema
+        // comments).
+        public LeafMediaType LeafMediaType { get; set; }
+        public LeafContentType LeafContentType { get; set; }
+
+        // GenericContainer kind only — copied from EndpointSchema at
+        // ToCache time. How many synthetic Container-typed folder levels
+        // sit between this item and its playable leaf, and their display
+        // labels.
+        public int ContainerLevelCount { get; set; }
+        public List<string> ContainerLevelNames { get; set; } = new List<string>();
+
         public string Title { get; set; } = string.Empty;
         public string OriginalTitle { get; set; } = string.Empty;
         public int? Year { get; set; }
         public string Overview { get; set; } = string.Empty;
         public string PosterUrl { get; set; }
+
+        // MusicArtistAlbum kind only — see FetchedItem for the source of these.
+        public string Artist { get; set; } = string.Empty;
+        public string AlbumArtist { get; set; } = string.Empty;
+        public string Album { get; set; } = string.Empty;
+
+        // PhotoAlbum kind only — see FetchedItem for the source of this.
+        public string MediaFileUrl { get; set; } = string.Empty;
+
         public Dictionary<string, string> ProviderIds { get; set; } = new Dictionary<string, string>();
     }
 
