@@ -57,7 +57,14 @@ namespace SyncChannel.Configuration
     //                      with a single configurable leaf underneath. The
     //                      fallback shape for anything that isn't Movie/TV/
     //                      Music/Photo-like.
-    public enum ChannelObjectKind { FlatMedia, Series, MusicArtistAlbum, PhotoAlbum, GenericContainer }
+    public enum ChannelObjectKind { FlatMedia, Series, MusicArtistAlbum, PhotoAlbum, GenericContainer, DisplayCard }
+
+    // DisplayCard: a picture + name, nothing underneath, nothing to play.
+    // Built as an empty Container folder (see SyncFolderChannel) rather
+    // than a Media item with no working source. For endpoints whose items
+    // are genuinely just browsable facts — e.g. an artist list where the
+    // artist itself isn't playable and has no meaningful children in this
+    // plugin's model.
 
     // Mirrors MediaBrowser.Model.Channels.ChannelMediaType. Only Video and
     // Audio are meaningful choices for a schema-authored leaf today — Photo

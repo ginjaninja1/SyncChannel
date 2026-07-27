@@ -1323,7 +1323,8 @@
         { value: 'Series', label: 'Series (Series -> Season -> Episode)' },
         { value: 'MusicArtistAlbum', label: 'Music (Artist -> Album -> Song)' },
         { value: 'PhotoAlbum', label: 'Photo Album (Album -> Photo)' },
-        { value: 'GenericContainer', label: 'Generic Container (N folders -> leaf)' }
+        { value: 'GenericContainer', label: 'Generic Container (N folders -> leaf)' },
+        { value: 'DisplayCard', label: 'Display Card (picture + name only, nothing underneath, nothing to play)' }
     ];
 
     var LEAF_MEDIA_TYPES = ['Video', 'Audio'];

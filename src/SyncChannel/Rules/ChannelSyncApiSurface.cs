@@ -561,10 +561,27 @@
 
             using (var doc = JsonDocument.Parse(rawJson))
             {
+                // Same envelope-unwrap fix as DiscoverFields/EvaluateAndMap —
+                // this was an independent, un-fixed third copy of the old
+                // root-is-array assumption, which is why the wizard never
+                // worked against Emby even after the other two were fixed.
+                if (!FieldDiscoveryService.TryLocateArray(doc.RootElement, schema.ItemsRootPath, out var arrayRoot, out _))
+                {
+                    return new
+                    {
+                        Status = "error",
+                        Message = string.IsNullOrEmpty(schema.ItemsRootPath)
+                            ? "Response isn't a JSON array at the root — set 'Items root path' on this schema."
+                            : "'" + schema.ItemsRootPath + "' didn't resolve to a JSON array — check 'Items root path' on this schema.",
+                        Fields = new List<string>(),
+                        Matches = new List<object>()
+                    };
+                }
+
                 int matchCount = 0;
                 var rows = new List<object>();
 
-                foreach (var el in doc.RootElement.EnumerateArray())
+                foreach (var el in arrayRoot.EnumerateArray())
                 {
                     if (!RuleEvaluator.Matches(el, request.Rule)) continue;
                     matchCount++;

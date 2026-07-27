@@ -45,6 +45,12 @@ namespace SyncChannel.Channels
         // since depth is schema-defined per item, not fixed like the others.
         private const string ContainerIdPrefix = "syncchannel-container-";
 
+        // DisplayCard kind — a picture + name, nothing underneath, nothing
+        // to play. Built as an empty Container folder rather than a Media
+        // item with no working source: an empty folder reads as "nothing
+        // here" cleanly, a play button that errors reads as broken.
+        private const string CardIdPrefix = "syncchannel-card-";
+
         private readonly FolderTreeStore treeStore;
         private readonly FolderCacheStore cacheStore;
         private readonly IApplicationPaths appPaths;
@@ -124,6 +130,13 @@ namespace SyncChannel.Channels
                 if (query.FolderId.StartsWith(ContainerIdPrefix, StringComparison.Ordinal))
                 {
                     return Task.FromResult(BuildContainerLevelListing(query.FolderId));
+                }
+
+                if (query.FolderId.StartsWith(CardIdPrefix, StringComparison.Ordinal))
+                {
+                    // Deliberately always empty — DisplayCard items have
+                    // nothing underneath them by design.
+                    return Task.FromResult(new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 });
                 }
             }
 
@@ -322,10 +335,34 @@ namespace SyncChannel.Channels
                 case ChannelObjectKind.GenericContainer:
                     return BuildContainerFolderItem(item, folderNodeId, level: 0);
 
+                case ChannelObjectKind.DisplayCard:
+                    return BuildDisplayCardItem(item, folderNodeId);
+
                 case ChannelObjectKind.FlatMedia:
                 default:
                     return BuildFlatMediaItem(item, folderNodeId, stubVideoPath);
             }
+        }
+
+        private static ChannelItemInfo BuildDisplayCardItem(CachedChannelItem item, string folderNodeId)
+        {
+            var info = new ChannelItemInfo
+            {
+                Id = CardIdPrefix + folderNodeId + "::" + item.StableId,
+                Name = item.Title,
+                Overview = item.Overview,
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.Container,
+                ImageUrl = item.PosterUrl,
+                ForceUpdate = true
+            };
+
+            foreach (var kvp in item.ProviderIds)
+            {
+                info.ProviderIds[kvp.Key] = kvp.Value;
+            }
+
+            return info;
         }
 
         private ChannelItemInfo BuildFlatMediaItem(CachedChannelItem item, string folderNodeId, string stubVideoPath)
