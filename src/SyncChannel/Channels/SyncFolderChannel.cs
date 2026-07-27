@@ -132,12 +132,6 @@ namespace SyncChannel.Channels
                     return Task.FromResult(BuildContainerLevelListing(query.FolderId));
                 }
 
-                if (query.FolderId.StartsWith(CardIdPrefix, StringComparison.Ordinal))
-                {
-                    // Deliberately always empty — DisplayCard items have
-                    // nothing underneath them by design.
-                    return Task.FromResult(new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 });
-                }
             }
 
             var tree = treeStore.Load();
@@ -189,7 +183,7 @@ namespace SyncChannel.Channels
             // — its Path is set directly from ChannelItemInfo.MediaSources at
             // creation time in GetChannelItemEntity, not via this callback.
             // Nothing to do here for photo ids.
-            if (id.StartsWith(PhotoIdPrefix, StringComparison.Ordinal))
+            if (id.StartsWith(PhotoIdPrefix, StringComparison.Ordinal) || id.StartsWith(CardIdPrefix, StringComparison.Ordinal))
             {
                 return Task.FromResult<IEnumerable<MediaSourceInfo>>(Array.Empty<MediaSourceInfo>());
             }
@@ -344,16 +338,27 @@ namespace SyncChannel.Channels
             }
         }
 
-        private static ChannelItemInfo BuildDisplayCardItem(CachedChannelItem item, string folderNodeId)
+        private ChannelItemInfo BuildDisplayCardItem(CachedChannelItem item, string folderNodeId)
         {
+            var cardId = CardIdPrefix + folderNodeId + "::" + item.StableId;
+
             var info = new ChannelItemInfo
             {
-                Id = CardIdPrefix + folderNodeId + "::" + item.StableId,
+                Id = cardId,
                 Name = item.Title,
                 Overview = item.Overview,
-                Type = ChannelItemType.Folder,
-                FolderType = ChannelFolderType.Container,
-                ImageUrl = item.PosterUrl,
+                // Confirmed via live test (Evidence.md): Type=Media,
+                // MediaType=Video, ContentType=Trailer is what Emby's
+                // construction switch actually maps to a real Photo
+                // BaseItem — same mechanism PhotoAlbum's leaf already uses.
+                // A Photo IS its picture; there's no separate thumbnail-vs-
+                // content split to fight with here, unlike the earlier
+                // Folder+ImageUrl approach (which relies on SetImage against
+                // a plain Folder — an open, previously-unconfirmed question
+                // per Evidence.md, and apparently doesn't render reliably).
+                Type = ChannelItemType.Media,
+                MediaType = ChannelMediaType.Video,
+                ContentType = ChannelMediaContentType.Trailer,
                 ForceUpdate = true
             };
 
@@ -362,6 +367,14 @@ namespace SyncChannel.Channels
                 info.ProviderIds[kvp.Key] = kvp.Value;
             }
 
+            if (string.IsNullOrEmpty(item.PosterUrl))
+            {
+                logger.Warn("ChannelSync: DisplayCard item '{0}' in folder '{1}' has no PosterUrl — will show with no image.", item.Title, folderNodeId);
+                return info;
+            }
+
+            logger.Info("ChannelSync: DisplayCard item '{0}' using PosterUrl '{1}' as its picture.", item.Title, item.PosterUrl);
+            info.MediaSources = new List<MediaSourceInfo> { BuildRemoteOrLocalMediaSource(cardId, item.PosterUrl) };
             return info;
         }
 
@@ -388,6 +401,11 @@ namespace SyncChannel.Channels
                 info.ProviderIds[kvp.Key] = kvp.Value;
             }
 
+            if (string.IsNullOrEmpty(item.PosterUrl))
+            {
+                logger.Warn("ChannelSync: FlatMedia item '{0}' in folder '{1}' has no PosterUrl — will show with no image.", item.Title, folderNodeId);
+            }
+
             if (!string.IsNullOrEmpty(stubVideoPath))
             {
                 info.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(itemId, stubVideoPath) };
@@ -396,7 +414,7 @@ namespace SyncChannel.Channels
             return info;
         }
 
-        private static ChannelItemInfo BuildSeriesFolderItem(CachedChannelItem item, string folderNodeId)
+        private ChannelItemInfo BuildSeriesFolderItem(CachedChannelItem item, string folderNodeId)
         {
             var info = new ChannelItemInfo
             {
@@ -419,6 +437,11 @@ namespace SyncChannel.Channels
             foreach (var kvp in item.ProviderIds)
             {
                 info.ProviderIds[kvp.Key] = kvp.Value;
+            }
+
+            if (string.IsNullOrEmpty(item.PosterUrl))
+            {
+                logger.Warn("ChannelSync: Series item '{0}' in folder '{1}' has no PosterUrl — will show with no image.", item.Title, folderNodeId);
             }
 
             return info;
@@ -591,6 +614,26 @@ namespace SyncChannel.Channels
             var stableId = ParseStableIdFromPayload(photoAlbumId.Substring(PhotoAlbumIdPrefix.Length));
             var source = FindCachedItem(folderNodeId, stableId);
 
+            // Falls back to PosterUrl if MediaFileUrl wasn't mapped —
+            // common misconfiguration (or a source with only one image
+            // concept, not a separate thumbnail-vs-full-photo distinction).
+            // Confirmed crash otherwise: Photo.Path ends up null when
+            // MediaSources is empty, and Emby's own PhotoProvider.HasChanged
+            // throws ArgumentException on Path.GetFullPath(null) — not a
+            // graceful failure, so this must be prevented here rather than
+            // left to surface as a server error.
+            var imageUrl = source != null && !string.IsNullOrEmpty(source.MediaFileUrl)
+                ? source.MediaFileUrl
+                : source?.PosterUrl;
+
+            if (string.IsNullOrEmpty(imageUrl))
+            {
+                logger.Warn(
+                    "ChannelSync: PhotoAlbum item '{0}' in folder '{1}' has neither MediaFileUrl nor PosterUrl — skipping its Photo child rather than creating one with no path.",
+                    source?.Title, folderNodeId);
+                return new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 };
+            }
+
             var photoId = PhotoIdPrefix + photoAlbumId;
 
             var photo = new ChannelItemInfo
@@ -605,13 +648,9 @@ namespace SyncChannel.Channels
                 Type = ChannelItemType.Media,
                 MediaType = ChannelMediaType.Video,
                 ContentType = ChannelMediaContentType.Trailer,
-                ForceUpdate = true
+                ForceUpdate = true,
+                MediaSources = new List<MediaSourceInfo> { BuildRemoteOrLocalMediaSource(photoId, imageUrl) }
             };
-
-            if (!string.IsNullOrEmpty(source?.MediaFileUrl))
-            {
-                photo.MediaSources = new List<MediaSourceInfo> { BuildRemoteOrLocalMediaSource(photoId, source.MediaFileUrl) };
-            }
 
             return new ChannelItemResult { Items = new List<ChannelItemInfo> { photo }, TotalRecordCount = 1 };
         }

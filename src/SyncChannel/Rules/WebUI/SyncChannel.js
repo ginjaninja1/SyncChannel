@@ -1167,13 +1167,28 @@
 
         rebuildRuleSetsSchemaOptions(view);
 
-        connSel.addEventListener('change', function () {
-            rebuildRuleSetsSchemaOptions(view);
-            onSchemaChanged(view);
-        });
+        // Guarded the same way refreshBtn already is below -- this function
+        // is called after every save (Connections, Endpoint Schemas) plus
+        // initial load, and connSel/schemaSel are the same persisting DOM
+        // nodes each time (only their options are rebuilt). Without this
+        // guard, each call stacked another 'change' listener on top of the
+        // last, so later in a session a single dropdown change fired
+        // multiple stale handlers, each re-rendering against a slightly
+        // different snapshot -- the actual cause of the Connection/Endpoint/
+        // RuleSet pane "not always in step" behavior.
+        if (!connSel.dataset.wired) {
+            connSel.dataset.wired = '1';
+            connSel.addEventListener('change', function () {
+                rebuildRuleSetsSchemaOptions(view);
+                onSchemaChanged(view);
+            });
+        }
 
         var schemaSel = view.querySelector('#rcsSchemaSelect');
-        schemaSel.addEventListener('change', function () { onSchemaChanged(view); });
+        if (!schemaSel.dataset.wired) {
+            schemaSel.dataset.wired = '1';
+            schemaSel.addEventListener('change', function () { onSchemaChanged(view); });
+        }
 
         var refreshBtn = view.querySelector('#rcsRefreshFieldsBtn');
         if (refreshBtn && !refreshBtn.dataset.wired) {
@@ -1348,6 +1363,28 @@
         MediaFileUrlField: [/^url$/i, /fileurl/i, /mediaurl/i, /^path$/i]
     };
 
+    // Transient, per-schema-id runtime state -- deliberately NOT stored on
+    // the schema object itself, so it can never leak into the saved JSON
+    // payload (SaveEndpointSchemas just JSON.stringifies the whole schemas
+    // array as-is).
+    var lastDiscoveryConnBySchemaId = {};
+    var lastRawJsonBySchemaId = {};
+
+    // The only role/type combinations that are genuinely unlikely to work
+    // even with the resolver's existing generic coercion (arrays already
+    // comma-join, scalars already stringify -- see RuleEvaluator.
+    // ResolveDisplayValue) -- a List dropped onto a slot that needs exactly
+    // one value. Left assignable for testing per explicit instruction, just
+    // flagged.
+    var ROLE_WARN_IF_LIST = { PosterUrlField: true, MediaFileUrlField: true, ArtistField: true, AlbumArtistField: true };
+
+    function roleFieldWarning(role, fieldType) {
+        if (fieldType === 'List' && ROLE_WARN_IF_LIST[role]) {
+            return 'This field returns a list -- values would be joined with commas, which probably isn\'t right here. Left assignable for testing, but expect an odd result.';
+        }
+        return null;
+    }
+
     function suggestRoleField(fields, patterns) {
         for (var p = 0; p < patterns.length; p++) {
             var match = fields.filter(function (f) {
@@ -1470,6 +1507,202 @@
         return input;
     }
 
+    // Reuses the exact same pointer-drag engine and 'field' kind as the
+    // rule builder's field chips (makeDraggableSource/registerDropTarget/
+    // makeFieldChip, defined near the top of this file) -- native HTML5 DnD
+    // was already ruled out as unreliable in Emby's webview (see
+    // Evidence.md), so this is the same mechanism, not a new one.
+    function buildRoleDropSlot(schema, schemaConnectionId, role, labelText, description, locked) {
+        var row = document.createElement('div');
+        row.className = 'esFormRow';
+        row.style.marginBottom = '0.9em';
+
+        var label = document.createElement('label');
+        label.innerText = labelText;
+        label.style.display = 'block';
+        label.style.marginBottom = '0.2em';
+        row.appendChild(label);
+
+        var slot = document.createElement('span');
+        slot.className = 'rcsSlot rcsSlot-field';
+        slot.style.display = 'inline-block';
+        slot.style.minWidth = '14em';
+        slot.innerText = schema[role] || 'drop a field here…';
+        if (schema[role]) slot.classList.add('rcsSlot-filled');
+        row.appendChild(slot);
+
+        var exampleEl = document.createElement('span');
+        exampleEl.className = 'fieldDescription';
+        exampleEl.style.marginLeft = '0.5em';
+        exampleEl.style.fontSize = '0.85em';
+        row.appendChild(exampleEl);
+
+        var warnEl = document.createElement('div');
+        warnEl.className = 'fieldDescription';
+        warnEl.style.color = '#e0a030';
+        warnEl.style.marginTop = '0.2em';
+        row.appendChild(warnEl);
+
+        function refreshWarning() {
+            var fields = schemaConnectionId ? discoveredFieldsCache[discoveryCacheKey(schemaConnectionId, schema.Id)] : null;
+            var field = fields && schema[role] ? fields.filter(function (f) { return f.JsonPath === schema[role]; })[0] : null;
+
+            exampleEl.innerText = (field && field.Examples && field.Examples.length) ? '(e.g. ' + field.Examples.join(', ') + ')' : '';
+            warnEl.innerText = roleFieldWarning(role, field ? field.Type : null) || '';
+        }
+        refreshWarning();
+
+        if (!locked) {
+            registerDropTarget(slot, ['field'], function (rawValue) {
+                var parsed;
+                try { parsed = JSON.parse(rawValue); } catch (e) { parsed = { path: rawValue, display: rawValue }; }
+                schema[role] = parsed.path;
+                slot.innerText = parsed.display || parsed.path;
+                slot.classList.add('rcsSlot-filled');
+                refreshWarning();
+            });
+
+            var clearBtn = document.createElement('span');
+            clearBtn.className = 'rcsIconBtn';
+            clearBtn.style.marginLeft = '0.5em';
+            clearBtn.innerText = 'Clear';
+            clearBtn.addEventListener('click', function () {
+                schema[role] = '';
+                slot.innerText = 'drop a field here…';
+                slot.classList.remove('rcsSlot-filled');
+                refreshWarning();
+            });
+            row.appendChild(clearBtn);
+        }
+
+        if (description) {
+            var desc = document.createElement('div');
+            desc.className = 'fieldDescription';
+            desc.style.marginTop = '0.2em';
+            desc.innerText = description;
+            row.appendChild(desc);
+        }
+
+        return row;
+    }
+
+    // Same toggleFieldFavorite/persistFieldFavorite the rule builder uses --
+    // just re-renders into the schema tab's own palette container instead
+    // of #rcsFieldChips.
+    function renderSchemaPaletteChips(view, connectionId, schemaId) {
+        var chipsWrap = view.querySelector('#esPaletteChips');
+        if (!chipsWrap) return;
+        chipsWrap.innerHTML = '';
+
+        var fields = discoveredFieldsCache[discoveryCacheKey(connectionId, schemaId)] || [];
+
+        sortSchemaFields(fields).forEach(function (f) {
+            var chip = makeFieldChip(f.JsonPath, f.DisplayName, f.Type, !!f.IsFavorite, function () {
+                var current = discoveredFieldsCache[discoveryCacheKey(connectionId, schemaId)] || [];
+                var field = current.filter(function (x) { return x.JsonPath === f.JsonPath; })[0];
+                if (!field) return;
+                field.IsFavorite = !field.IsFavorite;
+                discoveredFieldsCache[discoveryCacheKey(connectionId, schemaId)] = sortSchemaFields(current);
+                renderSchemaPaletteChips(view, connectionId, schemaId);
+                persistFieldFavorite(schemaId, f.JsonPath, field.IsFavorite);
+            });
+
+            if (f.Examples && f.Examples.length) {
+                var exampleEl = document.createElement('span');
+                exampleEl.className = 'fieldDescription';
+                exampleEl.style.marginLeft = '0.3em';
+                exampleEl.style.fontSize = '0.8em';
+                exampleEl.innerText = 'e.g. ' + f.Examples.join(', ');
+                chip.appendChild(exampleEl);
+            }
+
+            chipsWrap.appendChild(chip);
+        });
+    }
+
+    // Palette of draggable field chips, sourced from whatever was last
+    // discovered for this schema. Auto-hydrates from the server's persisted
+    // last-response cache (ForceRefresh: false) the first time this schema
+    // is shown in a page session, rather than requiring an explicit Test
+    // click every time -- same cache-first behavior the rule builder's
+    // field palette already relies on (lastResponseStore, server-side).
+    function buildFieldPalette(view, schema) {
+        var wrap = document.createElement('div');
+        wrap.style.margin = '0.8em 0';
+
+        var connId = lastDiscoveryConnBySchemaId[schema.Id];
+        var fields = connId ? discoveredFieldsCache[discoveryCacheKey(connId, schema.Id)] : null;
+
+        var label = document.createElement('div');
+        label.className = 'fieldDescription';
+        label.style.marginBottom = '0.4em';
+        wrap.appendChild(label);
+
+        var chipsWrap = document.createElement('div');
+        chipsWrap.id = 'esPaletteChips';
+        wrap.appendChild(chipsWrap);
+
+        var rawJsonHolder = document.createElement('div');
+        rawJsonHolder.id = 'esRawJsonHolder';
+        wrap.appendChild(rawJsonHolder);
+
+        function renderRawJson() {
+            rawJsonHolder.innerHTML = '';
+            var rawJson = lastRawJsonBySchemaId[schema.Id];
+            if (!rawJson) return;
+            var details = document.createElement('details');
+            details.style.marginTop = '0.8em';
+            var summary = document.createElement('summary');
+            summary.innerText = 'View raw response (fallback, if the palette above isn\'t enough)';
+            details.appendChild(summary);
+            var pre = document.createElement('pre');
+            pre.style.maxHeight = '260px';
+            pre.style.overflow = 'auto';
+            pre.style.whiteSpace = 'pre-wrap';
+            pre.style.fontSize = '0.85em';
+            pre.innerText = rawJson;
+            details.appendChild(pre);
+            rawJsonHolder.appendChild(details);
+        }
+
+        if (fields && fields.length) {
+            label.innerText = 'Drag a field onto any slot below to map it.';
+            renderSchemaPaletteChips(view, connId, schema.Id);
+            renderRawJson();
+        } else if (schema.Path && schema.SystemType) {
+            var matchingConns = connections.filter(function (c) { return c.SystemType === schema.SystemType; });
+            if (matchingConns.length) {
+                label.innerText = 'Loading previously fetched fields…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('ChannelSync/DiscoverFields'),
+                    data: JSON.stringify({ ConnectionId: matchingConns[0].Id, EndpointSchemaId: schema.Id, ForceRefresh: false, DraftSchema: schema }),
+                    contentType: 'application/json',
+                    dataType: 'json'
+                }).then(function (result) {
+                    if (result && result.Success !== false && result.Fields && result.Fields.length) {
+                        discoveredFieldsCache[discoveryCacheKey(matchingConns[0].Id, schema.Id)] = result.Fields;
+                        lastDiscoveryConnBySchemaId[schema.Id] = matchingConns[0].Id;
+                        lastRawJsonBySchemaId[schema.Id] = result.RawJson || '';
+                        label.innerText = 'Drag a field onto any slot below to map it.';
+                        renderSchemaPaletteChips(view, matchingConns[0].Id, schema.Id);
+                        renderRawJson();
+                    } else {
+                        label.innerText = 'No previously fetched data yet -- run Test endpoint & suggest fields above.';
+                    }
+                }).catch(function () {
+                    label.innerText = 'No previously fetched data yet -- run Test endpoint & suggest fields above.';
+                });
+            } else {
+                label.innerText = 'Run Test endpoint & suggest fields above to populate this palette.';
+            }
+        } else {
+            label.innerText = 'Run Test endpoint & suggest fields above to populate this palette.';
+        }
+
+        return wrap;
+    }
+
     function renderSchemaForm(view) {
         var container = view.querySelector('#esForm');
         container.innerHTML = '';
@@ -1517,6 +1750,7 @@
 
         if (!locked) {
             container.appendChild(buildSchemaTestAndSuggestRow(view, schema));
+            container.appendChild(buildFieldPalette(view, schema));
         }
 
         container.appendChild(esLabeledRow('Object kind', esSelectInput(OBJECT_KINDS, schema.ObjectKind, locked, function (v) {
@@ -1524,24 +1758,45 @@
             renderSchemaForm(view); // re-render to show/hide kind-specific fields
         }), 'Which Emby channel shape this schema\'s items become. Fixed choices -- not every combination of container/leaf is meaningful in Emby.'));
 
+        var mapperConnId = lastDiscoveryConnBySchemaId[schema.Id];
+
         // ---- Always-present role fields ----
-        container.appendChild(esLabeledRow('Identity field', esTextInput(schema.IdentityField, locked, function (v) { schema.IdentityField = v; }),
-            'Required. Dotted JSON path to a stable, unique id -- items without one are dropped.'));
-        container.appendChild(esLabeledRow('Title field', esTextInput(schema.TitleField, locked, function (v) { schema.TitleField = v; })));
-        container.appendChild(esLabeledRow('Original title field', esTextInput(schema.OriginalTitleField, locked, function (v) { schema.OriginalTitleField = v; })));
-        container.appendChild(esLabeledRow('Year field', esTextInput(schema.YearField, locked, function (v) { schema.YearField = v; })));
-        container.appendChild(esLabeledRow('Overview field', esTextInput(schema.OverviewField, locked, function (v) { schema.OverviewField = v; })));
-        container.appendChild(esLabeledRow('Poster URL field', esTextInput(schema.PosterUrlField, locked, function (v) { schema.PosterUrlField = v; })));
+        if (locked) {
+            container.appendChild(esLabeledRow('Identity field', esTextInput(schema.IdentityField, true, function () {}), 'Required. Dotted JSON path to a stable, unique id -- items without one are dropped.'));
+            container.appendChild(esLabeledRow('Title field', esTextInput(schema.TitleField, true, function () {})));
+            container.appendChild(esLabeledRow('Original title field', esTextInput(schema.OriginalTitleField, true, function () {})));
+            container.appendChild(esLabeledRow('Year field', esTextInput(schema.YearField, true, function () {})));
+            container.appendChild(esLabeledRow('Overview field', esTextInput(schema.OverviewField, true, function () {})));
+            container.appendChild(esLabeledRow('Poster URL field', esTextInput(schema.PosterUrlField, true, function () {})));
+        } else {
+            container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'IdentityField', 'Identity field',
+                'Required. A stable, unique id -- items without one are dropped.', locked));
+            container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'TitleField', 'Title field', null, locked));
+            container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'OriginalTitleField', 'Original title field', null, locked));
+            container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'YearField', 'Year field', null, locked));
+            container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'OverviewField', 'Overview field', null, locked));
+            container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'PosterUrlField', 'Poster URL field', null, locked));
+        }
 
         // ---- Kind-specific fields ----
         if (schema.ObjectKind === 'MusicArtistAlbum') {
-            container.appendChild(esLabeledRow('Artist field', esTextInput(schema.ArtistField, locked, function (v) { schema.ArtistField = v; })));
-            container.appendChild(esLabeledRow('Album artist field', esTextInput(schema.AlbumArtistField, locked, function (v) { schema.AlbumArtistField = v; })));
+            if (locked) {
+                container.appendChild(esLabeledRow('Artist field', esTextInput(schema.ArtistField, true, function () {})));
+                container.appendChild(esLabeledRow('Album artist field', esTextInput(schema.AlbumArtistField, true, function () {})));
+            } else {
+                container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'ArtistField', 'Artist field', null, locked));
+                container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'AlbumArtistField', 'Album artist field', null, locked));
+            }
         }
 
         if (schema.ObjectKind === 'PhotoAlbum') {
-            container.appendChild(esLabeledRow('Media file URL field', esTextInput(schema.MediaFileUrlField, locked, function (v) { schema.MediaFileUrlField = v; }),
-                'The actual image file URL -- distinct from Poster URL, which is a thumbnail.'));
+            if (locked) {
+                container.appendChild(esLabeledRow('Media file URL field', esTextInput(schema.MediaFileUrlField, true, function () {}),
+                    'The actual image file URL -- distinct from Poster URL, which is a thumbnail.'));
+            } else {
+                container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'MediaFileUrlField', 'Media file URL field',
+                    'The actual image file URL -- distinct from Poster URL, which is a thumbnail.', locked));
+            }
         }
 
         if (schema.ObjectKind === 'FlatMedia' || schema.ObjectKind === 'GenericContainer') {
@@ -1678,14 +1933,24 @@
             contentType: 'application/json',
             dataType: 'json'
         }).then(function (result) {
+            lastRawJsonBySchemaId[schema.Id] = (result && result.RawJson) || '';
+
             if (!result || result.Success === false) {
                 renderArrayCandidates(view, schema, connectionId, result && result.ArrayFieldCandidates, result && result.Message);
+                renderSchemaForm(view); // picks up the raw-json fallback panel even on failure
                 return;
             }
 
             if (candidatesHolder) candidatesHolder.innerHTML = '';
 
             var fields = result.Fields || [];
+
+            // Populate the palette cache the same way ensureFieldsDiscovered
+            // does for the rule builder, so fieldTypeFromDiscovery/
+            // makeFieldChip behave identically here.
+            discoveredFieldsCache[discoveryCacheKey(connectionId, schema.Id)] = fields;
+            lastDiscoveryConnBySchemaId[schema.Id] = connectionId;
+
             Object.keys(ROLE_HEURISTICS).forEach(function (role) {
                 if (!schema[role]) {
                     var guess = suggestRoleField(fields, ROLE_HEURISTICS[role]);
@@ -1693,7 +1958,7 @@
                 }
             });
             renderSchemaForm(view);
-            Dashboard.alert('Endpoint reachable and returned ' + fields.length + ' discovered field(s). Any empty role fields were pre-filled with a best guess.');
+            Dashboard.alert('Endpoint reachable and returned ' + fields.length + ' discovered field(s). Empty role fields were pre-filled with a best guess -- drag any chip below to change one.');
         }).catch(function () {
             renderArrayCandidates(view, schema, connectionId, null, 'Test request failed -- see server log.');
         });

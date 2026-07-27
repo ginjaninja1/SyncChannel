@@ -97,6 +97,12 @@ namespace SyncChannel.Configuration
         // Transport-only overlay, not the source of truth — FieldFavoritesStore
         // is. Stamped onto each field by ChannelSyncApiSurface at read time.
         public bool IsFavorite { get; set; }
+
+        // Up to 3 distinct, non-empty sample values seen for this path
+        // during discovery — shown next to the field in the mapper UI so an
+        // admin can tell what it actually contains without opening the raw
+        // response.
+        public List<string> Examples { get; set; } = new List<string>();
     }
 
     public class EndpointSchema

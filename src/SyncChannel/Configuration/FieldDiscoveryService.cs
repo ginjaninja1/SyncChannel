@@ -84,6 +84,13 @@ namespace SyncChannel.Configuration
             var typeByPath = new Dictionary<string, SchemaFieldType>(StringComparer.OrdinalIgnoreCase);
             var orderByPath = new List<string>(); // first-seen order, preserved as the tiebreaker within a sort group
 
+            // Up to 3 distinct, non-empty example values per path — shown
+            // next to a field in the mapper UI so an admin can tell what a
+            // path actually contains without opening the raw response.
+            // Capped and distinct-only so a field that's the same on every
+            // item (e.g. a constant "type": "artist") doesn't just repeat.
+            var examplesByPath = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
             using (var doc = JsonDocument.Parse(rawJson))
             {
                 if (doc.RootElement.ValueKind != JsonValueKind.Array)
@@ -93,7 +100,7 @@ namespace SyncChannel.Configuration
 
                 foreach (var element in doc.RootElement.EnumerateArray())
                 {
-                    WalkObject(element, string.Empty, 1, typeByPath, orderByPath);
+                    WalkObject(element, string.Empty, 1, typeByPath, orderByPath, examplesByPath);
                 }
             }
 
@@ -102,7 +109,8 @@ namespace SyncChannel.Configuration
                 JsonPath = path,
                 DisplayName = path,
                 Type = typeByPath[path],
-                IsFavorite = favorites.Contains(path)
+                IsFavorite = favorites.Contains(path),
+                Examples = examplesByPath.TryGetValue(path, out var ex) ? ex : new List<string>()
             }).ToList();
 
             return Sort(fields);
@@ -110,7 +118,8 @@ namespace SyncChannel.Configuration
 
         private static void WalkObject(
             JsonElement el, string prefix, int depth,
-            Dictionary<string, SchemaFieldType> typeByPath, List<string> orderByPath)
+            Dictionary<string, SchemaFieldType> typeByPath, List<string> orderByPath,
+            Dictionary<string, List<string>> examplesByPath)
         {
             if (depth > MaxDepth || el.ValueKind != JsonValueKind.Object) return;
 
@@ -123,22 +132,25 @@ namespace SyncChannel.Configuration
                     case JsonValueKind.True:
                     case JsonValueKind.False:
                         Merge(typeByPath, orderByPath, path, SchemaFieldType.Bool);
+                        AddExample(examplesByPath, path, prop.Value.GetBoolean().ToString());
                         break;
 
                     case JsonValueKind.Number:
                         Merge(typeByPath, orderByPath, path, SchemaFieldType.Number);
+                        AddExample(examplesByPath, path, prop.Value.ToString());
                         break;
 
                     case JsonValueKind.String:
                         Merge(typeByPath, orderByPath, path, LooksLikeDate(prop.Value.GetString()) ? SchemaFieldType.Date : SchemaFieldType.String);
+                        AddExample(examplesByPath, path, prop.Value.GetString());
                         break;
 
                     case JsonValueKind.Object:
-                        WalkObject(prop.Value, path, depth + 1, typeByPath, orderByPath);
+                        WalkObject(prop.Value, path, depth + 1, typeByPath, orderByPath, examplesByPath);
                         break;
 
                     case JsonValueKind.Array:
-                        WalkArray(prop.Value, path, depth + 1, typeByPath, orderByPath);
+                        WalkArray(prop.Value, path, depth + 1, typeByPath, orderByPath, examplesByPath);
                         break;
 
                         // Null/Undefined: skip. Another element in the array may
@@ -148,9 +160,28 @@ namespace SyncChannel.Configuration
             }
         }
 
+        private const int MaxExamplesPerPath = 3;
+
+        private static void AddExample(Dictionary<string, List<string>> examplesByPath, string path, string value)
+        {
+            if (string.IsNullOrEmpty(value)) return;
+
+            if (!examplesByPath.TryGetValue(path, out var list))
+            {
+                list = new List<string>();
+                examplesByPath[path] = list;
+            }
+
+            if (list.Count < MaxExamplesPerPath && !list.Contains(value, StringComparer.OrdinalIgnoreCase))
+            {
+                list.Add(value);
+            }
+        }
+
         private static void WalkArray(
             JsonElement arr, string path, int depth,
-            Dictionary<string, SchemaFieldType> typeByPath, List<string> orderByPath)
+            Dictionary<string, SchemaFieldType> typeByPath, List<string> orderByPath,
+            Dictionary<string, List<string>> examplesByPath)
         {
             if (depth > MaxDepth) return;
 
@@ -161,10 +192,15 @@ namespace SyncChannel.Configuration
                 switch (item.ValueKind)
                 {
                     case JsonValueKind.String:
+                        sawPrimitive = true;
+                        AddExample(examplesByPath, path, item.GetString());
+                        break;
+
                     case JsonValueKind.Number:
                     case JsonValueKind.True:
                     case JsonValueKind.False:
                         sawPrimitive = true;
+                        AddExample(examplesByPath, path, item.ToString());
                         break;
 
                     case JsonValueKind.Object:
@@ -182,10 +218,14 @@ namespace SyncChannel.Configuration
                             switch (prop.Value.ValueKind)
                             {
                                 case JsonValueKind.String:
+                                    Merge(typeByPath, orderByPath, subPath, SchemaFieldType.List);
+                                    AddExample(examplesByPath, subPath, prop.Value.GetString());
+                                    break;
                                 case JsonValueKind.Number:
                                 case JsonValueKind.True:
                                 case JsonValueKind.False:
                                     Merge(typeByPath, orderByPath, subPath, SchemaFieldType.List);
+                                    AddExample(examplesByPath, subPath, prop.Value.ToString());
                                     break;
                             }
                         }

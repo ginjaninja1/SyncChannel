@@ -205,7 +205,16 @@ namespace SyncChannel.Fetching
         private static int? ResolveInt(JsonElement el, string fieldPath)
         {
             var s = ResolveString(el, fieldPath);
-            return int.TryParse(s, out var n) ? n : (int?)null;
+            if (int.TryParse(s, out var n)) return n;
+
+            // Falls back to date parsing — a Year role field pointed at a
+            // date-shaped field (e.g. "premiereDate": "2024-03-01") is a
+            // real, expected mapping, not a malformed one; extracting the
+            // year is "parsing that should happen automatically" rather
+            // than something to just warn about and leave broken.
+            if (DateTimeOffset.TryParse(s, out var dt)) return dt.Year;
+
+            return null;
         }
 
         // Radarr/Sonarr both express posters as images[].coverType == "poster" -> remoteUrl.
@@ -215,20 +224,33 @@ namespace SyncChannel.Fetching
         // just leave PosterUrlField blank and get no poster, which is fine.
         private static string ResolvePoster(JsonElement el, string posterField)
         {
-            if (string.IsNullOrEmpty(posterField) ||
-                !el.TryGetProperty(posterField, out var imagesEl) ||
-                imagesEl.ValueKind != JsonValueKind.Array)
+            if (string.IsNullOrEmpty(posterField) || !el.TryGetProperty(posterField, out var valueEl))
             {
                 return null;
             }
 
-            foreach (var img in imagesEl.EnumerateArray())
+            // Generic case first — most non-*arr sources (Emby included)
+            // express a poster/cover as a plain string field, not a nested
+            // images[] array. Previously this method only understood the
+            // *arr-specific array shape and silently returned null for
+            // everything else, including Emby, even though the field
+            // mapping itself was correct.
+            if (valueEl.ValueKind == JsonValueKind.String)
             {
-                if (img.TryGetProperty("coverType", out var coverType) &&
-                    string.Equals(coverType.GetString(), "poster", StringComparison.OrdinalIgnoreCase) &&
-                    img.TryGetProperty("remoteUrl", out var remoteUrl))
+                return valueEl.GetString();
+            }
+
+            // *arr-family fallback: images[].coverType == "poster" -> remoteUrl.
+            if (valueEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var img in valueEl.EnumerateArray())
                 {
-                    return remoteUrl.GetString();
+                    if (img.TryGetProperty("coverType", out var coverType) &&
+                        string.Equals(coverType.GetString(), "poster", StringComparison.OrdinalIgnoreCase) &&
+                        img.TryGetProperty("remoteUrl", out var remoteUrl))
+                    {
+                        return remoteUrl.GetString();
+                    }
                 }
             }
 

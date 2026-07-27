@@ -490,7 +490,7 @@
                             message += " No array-shaped field found at the top level either — this endpoint's shape may need a deeper path, or isn't list-shaped at all.";
                         }
 
-                        return new { Success = false, Message = message, ArrayFieldCandidates = arrayFieldCandidates };
+                        return new { Success = false, Message = message, ArrayFieldCandidates = arrayFieldCandidates, RawJson = rawJson };
                     }
 
                     discovered = FieldDiscoveryService.Discover(arrayRoot.GetRawText(), favoritesStore.GetFavorites(schema.Id));
@@ -502,7 +502,7 @@
                 return new { Success = false, Message = "Response wasn't valid JSON." };
             }
 
-            return new { Success = true, Fields = discovered, ArrayFieldCandidates = arrayFieldCandidates };
+            return new { Success = true, Fields = discovered, ArrayFieldCandidates = arrayFieldCandidates, RawJson = rawJson };
         }
 
         public object Post(SetFieldFavorite r)
