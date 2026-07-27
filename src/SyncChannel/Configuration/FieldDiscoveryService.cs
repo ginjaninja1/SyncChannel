@@ -18,6 +18,50 @@ namespace SyncChannel.Configuration
 
     public static class FieldDiscoveryService
     {
+        // Locates the array to walk, honoring an optional dotted path for
+        // envelope-shaped responses (e.g. Emby's {"Items": [...],
+        // "TotalRecordCount": ...}) where the root itself isn't the array.
+        // Also always reports every top-level key whose value IS an array,
+        // regardless of success — so a caller can suggest those as
+        // candidates the moment the configured path doesn't resolve, or
+        // when none is configured yet and the root isn't already an array.
+        public static bool TryLocateArray(JsonElement root, string itemsRootPath, out JsonElement arrayElement, out List<string> topLevelArrayKeyCandidates)
+        {
+            topLevelArrayKeyCandidates = new List<string>();
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        topLevelArrayKeyCandidates.Add(prop.Name);
+                    }
+                }
+            }
+
+            var current = root;
+            if (!string.IsNullOrEmpty(itemsRootPath))
+            {
+                foreach (var segment in itemsRootPath.Split('.'))
+                {
+                    if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out current))
+                    {
+                        arrayElement = default;
+                        return false;
+                    }
+                }
+            }
+
+            if (current.ValueKind == JsonValueKind.Array)
+            {
+                arrayElement = current;
+                return true;
+            }
+
+            arrayElement = default;
+            return false;
+        }
+
         // Depth budget from the array element root. 1 = top-level scalar,
         // 2 = one level of object/array nesting (ratings.value,
         // images.coverType), 3 = two levels (seasons.statistics.episodeCount).

@@ -135,6 +135,13 @@ namespace SyncChannel.Configuration
         // Appended to Connection.BaseUrl, e.g. "/api/v3/movie".
         public string Path { get; set; } = string.Empty;
 
+        // Dotted path to the array within the response, for endpoints that
+        // wrap it in an envelope object (e.g. Emby's {"Items": [...],
+        // "TotalRecordCount": ...}) instead of returning a bare array at
+        // the root (the Radarr/Sonarr shape). Blank means the response
+        // root IS the array — unchanged default behavior.
+        public string ItemsRootPath { get; set; } = string.Empty;
+
         // Replaces the old fixed AuthStyle enum, which was never actually
         // read by HttpFetchProvider (the query param name and X-Api-Key
         // header were hardcoded regardless of its value — confirmed dead

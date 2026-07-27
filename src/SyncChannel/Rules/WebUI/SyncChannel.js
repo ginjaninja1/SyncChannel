@@ -1502,6 +1502,18 @@
         container.appendChild(esLabeledRow('Endpoint path', esTextInput(schema.Path, locked, function (v) { schema.Path = v; }),
             'Appended to the connection\'s base URL, e.g. "/api/v3/movie".'));
 
+        container.appendChild(esLabeledRow('API key parameter name', esTextInput(schema.ApiKeyParamName || 'apikey', locked, function (v) { schema.ApiKeyParamName = v; }),
+            'The query-string parameter the connection\'s API key is sent as. Most *arr-family apps use "apikey"; Emby uses "api_key" -- check your source\'s own API docs if unsure.'));
+
+        container.appendChild(esLabeledRow('Items root path', esTextInput(schema.ItemsRootPath, locked, function (v) { schema.ItemsRootPath = v; }),
+            'Leave blank if the response IS the array (Radarr/Sonarr). Set this if the array is nested inside an envelope object -- e.g. Emby wraps its lists as {"Items": [...], "TotalRecordCount": ...}, so this would be "Items". Test & Suggest below will offer candidates automatically if this is wrong or empty.'));
+
+        container.appendChild(buildStaticQueryParamsEditor(view, schema, locked));
+
+        var arrayCandidatesHolder = document.createElement('div');
+        arrayCandidatesHolder.id = 'esArrayCandidates';
+        container.appendChild(arrayCandidatesHolder);
+
         if (!locked) {
             container.appendChild(buildSchemaTestAndSuggestRow(view, schema));
         }
@@ -1560,6 +1572,170 @@
 
     }
 
+    // Plain key/value rows, not a header editor -- static query params
+    // (e.g. Limit=25) are explicit fields on screen, per preference for
+    // fields over headers being more obvious.
+    function buildStaticQueryParamsEditor(view, schema, locked) {
+        if (!schema.StaticQueryParams) schema.StaticQueryParams = {};
+
+        var wrap = document.createElement('div');
+        wrap.style.marginBottom = '0.9em';
+
+        var label = document.createElement('label');
+        label.innerText = 'Additional static query parameters';
+        label.style.display = 'block';
+        label.style.marginBottom = '0.3em';
+        wrap.appendChild(label);
+
+        var keys = Object.keys(schema.StaticQueryParams);
+
+        keys.forEach(function (key) {
+            var row = document.createElement('div');
+            row.style.display = 'flex';
+            row.style.gap = '0.4em';
+            row.style.marginBottom = '0.3em';
+
+            var keyInput = document.createElement('input');
+            keyInput.type = 'text';
+            keyInput.style.width = '10em';
+            keyInput.value = key;
+            keyInput.placeholder = 'name, e.g. Limit';
+            keyInput.disabled = !!locked;
+
+            var valInput = document.createElement('input');
+            valInput.type = 'text';
+            valInput.style.width = '10em';
+            valInput.value = schema.StaticQueryParams[key];
+            valInput.placeholder = 'value, e.g. 25';
+            valInput.disabled = !!locked;
+            valInput.addEventListener('input', function (e) { schema.StaticQueryParams[key] = e.target.value; });
+
+            keyInput.addEventListener('change', function (e) {
+                var newKey = e.target.value;
+                if (!newKey || newKey === key) return;
+                var val = schema.StaticQueryParams[key];
+                delete schema.StaticQueryParams[key];
+                schema.StaticQueryParams[newKey] = val;
+                renderSchemaForm(view);
+            });
+
+            row.appendChild(keyInput);
+            row.appendChild(valInput);
+
+            if (!locked) {
+                var removeBtn = document.createElement('span');
+                removeBtn.className = 'rcsIconBtn';
+                removeBtn.innerText = 'Remove';
+                removeBtn.addEventListener('click', function () {
+                    delete schema.StaticQueryParams[key];
+                    renderSchemaForm(view);
+                });
+                row.appendChild(removeBtn);
+            }
+
+            wrap.appendChild(row);
+        });
+
+        if (!locked) {
+            var addBtn = document.createElement('span');
+            addBtn.className = 'rcsIconBtn';
+            addBtn.innerText = '+ Add parameter';
+            addBtn.addEventListener('click', function () {
+                var n = 1;
+                var newKey = 'param';
+                while (schema.StaticQueryParams.hasOwnProperty(newKey)) {
+                    newKey = 'param' + (++n);
+                }
+                schema.StaticQueryParams[newKey] = '';
+                renderSchemaForm(view);
+            });
+            wrap.appendChild(addBtn);
+        }
+
+        var desc = document.createElement('div');
+        desc.className = 'fieldDescription';
+        desc.style.marginTop = '0.3em';
+        desc.innerText = 'Always appended as literal query-string values, e.g. Limit=25. For values that should reflect fetched data, use the role fields instead.';
+        wrap.appendChild(desc);
+
+        return wrap;
+    }
+
+    // Raw ApiClient call (not ensureFieldsDiscovered's plain Promise-of-
+    // fields contract) since this needs the FULL result -- including
+    // ArrayFieldCandidates on failure -- not just the Fields array on
+    // success. ensureFieldsDiscovered stays the simpler shape the rule
+    // builder palette already relies on.
+    function runSchemaDiscovery(view, schema, connectionId) {
+        var candidatesHolder = view.querySelector('#esArrayCandidates');
+        if (candidatesHolder) candidatesHolder.innerHTML = 'Testing...';
+
+        ApiClient.ajax({
+            type: 'POST',
+            url: ApiClient.getUrl('ChannelSync/DiscoverFields'),
+            data: JSON.stringify({ ConnectionId: connectionId, EndpointSchemaId: schema.Id, ForceRefresh: true, DraftSchema: schema }),
+            contentType: 'application/json',
+            dataType: 'json'
+        }).then(function (result) {
+            if (!result || result.Success === false) {
+                renderArrayCandidates(view, schema, connectionId, result && result.ArrayFieldCandidates, result && result.Message);
+                return;
+            }
+
+            if (candidatesHolder) candidatesHolder.innerHTML = '';
+
+            var fields = result.Fields || [];
+            Object.keys(ROLE_HEURISTICS).forEach(function (role) {
+                if (!schema[role]) {
+                    var guess = suggestRoleField(fields, ROLE_HEURISTICS[role]);
+                    if (guess) schema[role] = guess;
+                }
+            });
+            renderSchemaForm(view);
+            Dashboard.alert('Endpoint reachable and returned ' + fields.length + ' discovered field(s). Any empty role fields were pre-filled with a best guess.');
+        }).catch(function () {
+            renderArrayCandidates(view, schema, connectionId, null, 'Test request failed -- see server log.');
+        });
+    }
+
+    // The "have a go at guessing, show me the shape" behavior for
+    // envelope-wrapped responses: the server already found every
+    // top-level key whose value is itself an array (Emby's "Items", or
+    // whatever the equivalent is for any other wrapped source) -- render
+    // those as one-click choices that set Items Root Path and immediately
+    // retry, rather than making the admin guess blind or read raw JSON.
+    function renderArrayCandidates(view, schema, connectionId, candidates, message) {
+        var holder = view.querySelector('#esArrayCandidates');
+        if (!holder) return;
+        holder.innerHTML = '';
+
+        var msgEl = document.createElement('div');
+        msgEl.className = 'fieldDescription';
+        msgEl.style.marginTop = '0.4em';
+        msgEl.innerText = message || 'Endpoint test failed.';
+        holder.appendChild(msgEl);
+
+        if (candidates && candidates.length) {
+            var chipsWrap = document.createElement('div');
+            chipsWrap.style.marginTop = '0.4em';
+
+            candidates.forEach(function (key) {
+                var chip = document.createElement('span');
+                chip.className = 'rcsIconBtn';
+                chip.style.marginRight = '0.4em';
+                chip.innerText = 'Use "' + key + '"';
+                chip.addEventListener('click', function () {
+                    schema.ItemsRootPath = key;
+                    renderSchemaForm(view);
+                    runSchemaDiscovery(view, schema, connectionId);
+                });
+                chipsWrap.appendChild(chip);
+            });
+
+            holder.appendChild(chipsWrap);
+        }
+    }
+
     // Test/Suggest lives right after the Endpoint path field -- it needs
     // Path to build a real URL, and repeats the System Type as its own
     // dropdown (a saved Connection matching schema.SystemType) so which
@@ -1611,24 +1787,7 @@
         suggestBtn.innerText = 'Test endpoint & suggest fields';
         suggestBtn.addEventListener('click', function () {
             if (!connSelect.value) { Dashboard.alert('No matching connection selected.'); return; }
-            // Always sent as a draft -- works whether or not this schema
-            // has been saved yet, and always reflects the live in-progress
-            // values on screen rather than whatever was last saved.
-            ensureFieldsDiscovered(connSelect.value, schema.Id, true, schema).then(function (fields) {
-                // Reaching here at all means Path + credentials together
-                // produced a real response -- the authoritative test a
-                // bare connection can't do.
-                Object.keys(ROLE_HEURISTICS).forEach(function (role) {
-                    if (!schema[role]) {
-                        var guess = suggestRoleField(fields, ROLE_HEURISTICS[role]);
-                        if (guess) schema[role] = guess;
-                    }
-                });
-                renderSchemaForm(view);
-                Dashboard.alert('Endpoint reachable and returned ' + fields.length + ' discovered field(s). Any empty role fields were pre-filled with a best guess.');
-            }).catch(function (err) {
-                Dashboard.alert('Endpoint test failed: ' + (err && err.message ? err.message : 'see server log'));
-            });
+            runSchemaDiscovery(view, schema, connSelect.value);
         });
         wrap.appendChild(suggestBtn);
 

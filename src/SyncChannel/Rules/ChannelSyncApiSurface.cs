@@ -470,17 +470,39 @@
             }
 
             List<SchemaField> discovered;
+            List<string> arrayFieldCandidates = new List<string>();
             try
             {
-                discovered = FieldDiscoveryService.Discover(rawJson, favoritesStore.GetFavorites(schema.Id));
+                using (var doc = JsonDocument.Parse(rawJson))
+                {
+                    if (!FieldDiscoveryService.TryLocateArray(doc.RootElement, schema.ItemsRootPath, out var arrayRoot, out arrayFieldCandidates))
+                    {
+                        var message = string.IsNullOrEmpty(schema.ItemsRootPath)
+                            ? "Response isn't a JSON array at the root."
+                            : "\"" + schema.ItemsRootPath + "\" didn't resolve to a JSON array.";
+
+                        if (arrayFieldCandidates.Count > 0)
+                        {
+                            message += " Found " + arrayFieldCandidates.Count + " array-shaped field(s) at the top level — pick one below as the Items Root Path.";
+                        }
+                        else
+                        {
+                            message += " No array-shaped field found at the top level either — this endpoint's shape may need a deeper path, or isn't list-shaped at all.";
+                        }
+
+                        return new { Success = false, Message = message, ArrayFieldCandidates = arrayFieldCandidates };
+                    }
+
+                    discovered = FieldDiscoveryService.Discover(arrayRoot.GetRawText(), favoritesStore.GetFavorites(schema.Id));
+                }
             }
             catch (Exception ex)
             {
                 logger.ErrorException("ChannelSync: Field discovery failed for schema '{0}'", ex, schema.DisplayName);
-                return new { Success = false, Message = "Response wasn't a JSON array — discovery only works against list-style endpoints." };
+                return new { Success = false, Message = "Response wasn't valid JSON." };
             }
 
-            return new { Success = true, Fields = discovered };
+            return new { Success = true, Fields = discovered, ArrayFieldCandidates = arrayFieldCandidates };
         }
 
         public object Post(SetFieldFavorite r)

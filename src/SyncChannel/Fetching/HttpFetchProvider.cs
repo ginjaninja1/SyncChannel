@@ -95,7 +95,15 @@ namespace SyncChannel.Fetching
                 {
                     var results = new List<FetchedItem>();
 
-                    foreach (var el in doc.RootElement.EnumerateArray())
+                    if (!FieldDiscoveryService.TryLocateArray(doc.RootElement, schema.ItemsRootPath, out var arrayRoot, out _))
+                    {
+                        logger.Warn(
+                            "ChannelSync: Response for schema '{0}' isn't a JSON array at '{1}' — check Items Root Path.",
+                            schema.DisplayName, string.IsNullOrEmpty(schema.ItemsRootPath) ? "(root)" : schema.ItemsRootPath);
+                        return null;
+                    }
+
+                    foreach (var el in arrayRoot.EnumerateArray())
                     {
                         if (!RuleEvaluator.Matches(el, ruleRoot))
                         {
