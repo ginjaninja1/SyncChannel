@@ -243,7 +243,7 @@
     // Rule-set state (module-scoped so the Rule Sets tab, the palette, and
     // the folder tree's Add-Fetch dropdown can all read the same lists).
     // ===================================================================
-    var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey, SystemType, LastTestSucceeded, LastTestedUtc }]
+    var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey, SystemType, ApiKeyParamName, LastTestSucceeded, LastTestedUtc }]
     var schemas = [];               // [{ Id, DisplayName, SystemType, Fields: [{Key/JsonPath, DisplayName, Type}] }]
     var ruleSetsFile = null;        // { RuleSets: [{ Id, Name, EndpointSchemaId, IsBuiltIn, Root }] }
     var currentRuleSetIndex = -1;   // index into ruleSetsFile.RuleSets bound to the canvas
@@ -1736,9 +1736,6 @@
         container.appendChild(esLabeledRow('Endpoint path', esTextInput(schema.Path, locked, function (v) { schema.Path = v; }),
             'Appended to the connection\'s base URL, e.g. "/api/v3/movie".'));
 
-        container.appendChild(esLabeledRow('API key parameter name', esTextInput(schema.ApiKeyParamName || 'apikey', locked, function (v) { schema.ApiKeyParamName = v; }),
-            'The query-string parameter the connection\'s API key is sent as. Most *arr-family apps use "apikey"; Emby uses "api_key" -- check your source\'s own API docs if unsure.'));
-
         container.appendChild(esLabeledRow('Items root path', esTextInput(schema.ItemsRootPath, locked, function (v) { schema.ItemsRootPath = v; }),
             'Leave blank if the response IS the array (Radarr/Sonarr). Set this if the array is nested inside an envelope object -- e.g. Emby wraps its lists as {"Items": [...], "TotalRecordCount": ...}, so this would be "Items". Test & Suggest below will offer candidates automatically if this is wrong or empty.'));
 
@@ -2607,6 +2604,22 @@
     // reappears as a suggestion everywhere else too.
     var KNOWN_SYSTEM_TYPES = ['radarr', 'sonarr'];
 
+    // The Application dropdown on the Connections tab. A known entry is
+    // authoritative for SystemType + API key parameter name (always still
+    // editable afterwards -- see renderConnectionsTab); "custom" hands
+    // SystemType to a free-text field instead, for any REST source with
+    // its own Endpoint Schema. This is the single source of truth for
+    // that preset table -- it does not need to match KNOWN_SYSTEM_TYPES,
+    // which is a separate, open-ended list seeded from whatever's
+    // actually been used (including past custom SystemTypes).
+    var KNOWN_APPLICATIONS = [
+        { key: 'radarr', label: 'Radarr (built-in)', apiKeyParamName: 'apikey', urlPlaceholder: 'http://192.168.1.10:7878' },
+        { key: 'sonarr', label: 'Sonarr (built-in)', apiKeyParamName: 'apikey', urlPlaceholder: 'http://192.168.1.10:8989' },
+        { key: 'emby', label: 'Emby (built-in)', apiKeyParamName: 'api_key', urlPlaceholder: 'http://192.168.1.10:8096' },
+        { key: 'custom', label: 'Custom', apiKeyParamName: 'apikey', urlPlaceholder: 'http://192.168.1.10:port' }
+    ];
+    var CUSTOM_APPLICATION = KNOWN_APPLICATIONS[KNOWN_APPLICATIONS.length - 1];
+
     function refreshKnownSystemTypesFromSchemas() {
         schemas.forEach(function (s) {
             if (s.SystemType && KNOWN_SYSTEM_TYPES.indexOf(s.SystemType) === -1) {
@@ -2651,28 +2664,80 @@
             var urlInput = document.createElement('input');
             urlInput.style.width = '16em';
             urlInput.value = c.BaseUrl;
-            urlInput.placeholder = 'http://127.0.0.1:7878';
             urlInput.addEventListener('input', function (e) { c.BaseUrl = e.target.value; });
 
-            // Free text with a datalist of known values, not a closed
-            // dropdown -- must be able to match any custom EndpointSchema's
-            // SystemType, not just the two built-ins.
-            var typeSelect = document.createElement('input');
-            typeSelect.setAttribute('list', 'knownSystemTypes');
-            typeSelect.style.width = '10em';
-            typeSelect.placeholder = 'radarr';
-            typeSelect.value = c.SystemType || KNOWN_SYSTEM_TYPES[0];
-            if (!c.SystemType) {
-                c.SystemType = typeSelect.value;
-            }
-            typeSelect.addEventListener('input', function (e) {
-                c.SystemType = e.target.value;
-                // A newly-typed System Type here must be immediately
-                // selectable on the Endpoint Schema tab's dropdown -- that's
-                // the only place new system types get defined.
+            // Single decision point: Application. Radarr/Sonarr/Emby are
+            // known, fixed presets (scheme/port hint + API key parameter
+            // name); Custom hands control of SystemType and the API key
+            // parameter name to the operator directly. This replaces an
+            // earlier attempt with two independent free-text fields that
+            // silently guessed at each other -- confusing, and neither a
+            // real closed choice nor a real free one. This is one.
+            var appSelect = document.createElement('select');
+            appSelect.style.width = '10em';
+            KNOWN_APPLICATIONS.forEach(function (app) {
+                var opt = document.createElement('option');
+                opt.value = app.key;
+                opt.textContent = app.label;
+                appSelect.appendChild(opt);
+            });
+
+            var customTypeInput = document.createElement('input');
+            customTypeInput.setAttribute('list', 'knownSystemTypes');
+            customTypeInput.style.width = '9em';
+            customTypeInput.placeholder = 'system type';
+            customTypeInput.title = 'Free-text identifier for this custom system -- must match the System Type set on its Endpoint Schema.';
+
+            var paramNameInput = document.createElement('input');
+            paramNameInput.style.width = '6em';
+            paramNameInput.placeholder = 'apikey';
+            paramNameInput.title = 'The query-string parameter this connection\'s API key is sent as. Prefilled from Application, always overridable.';
+
+            // Resolve the app dropdown's initial selection from persisted
+            // state: an exact match to a known built-in key, or Custom for
+            // anything else (including a first-ever connection).
+            var currentApp = KNOWN_APPLICATIONS.find(function (a) { return a.key === c.SystemType; }) || CUSTOM_APPLICATION;
+            appSelect.value = currentApp.key;
+            customTypeInput.value = c.SystemType || '';
+            customTypeInput.style.display = (currentApp.key === 'custom') ? '' : 'none';
+            paramNameInput.value = c.ApiKeyParamName || currentApp.apiKeyParamName;
+            if (!c.SystemType) { c.SystemType = currentApp.key; }
+            if (!c.ApiKeyParamName) { c.ApiKeyParamName = paramNameInput.value; }
+            urlInput.placeholder = currentApp.urlPlaceholder;
+
+            appSelect.addEventListener('change', function (e) {
+                var app = KNOWN_APPLICATIONS.find(function (a) { return a.key === e.target.value; }) || CUSTOM_APPLICATION;
+
+                customTypeInput.style.display = (app.key === 'custom') ? '' : 'none';
+                urlInput.placeholder = app.urlPlaceholder;
+
+                // A built-in selection is authoritative over SystemType and
+                // the API key parameter name -- that's the whole point of
+                // picking a known application instead of Custom. Custom
+                // hands both back to the operator, starting from whatever
+                // was last set (usually blank on a brand-new connection).
+                if (app.key === 'custom') {
+                    c.SystemType = customTypeInput.value;
+                } else {
+                    c.SystemType = app.key;
+                    c.ApiKeyParamName = app.apiKeyParamName;
+                    paramNameInput.value = app.apiKeyParamName;
+                }
+
                 refreshKnownSystemTypesFromConnections();
                 renderSystemTypeDatalist(view);
                 renderSchemaForm(view);
+            });
+
+            customTypeInput.addEventListener('input', function (e) {
+                c.SystemType = e.target.value;
+                refreshKnownSystemTypesFromConnections();
+                renderSystemTypeDatalist(view);
+                renderSchemaForm(view);
+            });
+
+            paramNameInput.addEventListener('input', function (e) {
+                c.ApiKeyParamName = e.target.value;
             });
 
             var keyWrap = document.createElement('span');
@@ -2776,7 +2841,9 @@
 
             row.appendChild(labelInput);
             row.appendChild(urlInput);
-            row.appendChild(typeSelect);
+            row.appendChild(appSelect);
+            row.appendChild(customTypeInput);
+            row.appendChild(paramNameInput);
             row.appendChild(keyWrap);
             row.appendChild(testBtn);
             row.appendChild(removeBtn);
@@ -2892,7 +2959,17 @@
             view.querySelector('#ftSaveBtn').addEventListener('click', function () { saveFolderTree(view); });
 
             view.querySelector('#connAddBtn').addEventListener('click', function () {
-                connections.push({ Id: newId(), DisplayLabel: 'New Connection', BaseUrl: '', ApiKey: '', SystemType: KNOWN_SYSTEM_TYPES[0], LastTestSucceeded: null, LastTestedUtc: null });
+                var defaultApp = KNOWN_APPLICATIONS[0];
+                connections.push({
+                    Id: newId(),
+                    DisplayLabel: 'New Connection',
+                    BaseUrl: '',
+                    ApiKey: '',
+                    SystemType: defaultApp.key,
+                    ApiKeyParamName: defaultApp.apiKeyParamName,
+                    LastTestSucceeded: null,
+                    LastTestedUtc: null
+                });
                 renderConnectionsTab(view);
             });
             view.querySelector('#connSaveBtn').addEventListener('click', function () { saveConnections(view); });

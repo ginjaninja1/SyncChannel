@@ -24,6 +24,14 @@ namespace SyncChannel.Configuration
         // ever speak the API shape of whatever's actually running there.
         public string SystemType { get; set; } = string.Empty;
 
+        // Moved here from EndpointSchema — the query-string parameter name
+        // an API key is sent as ("apikey" for the *arr-family apps, "api_key"
+        // for Emby) is a fact about the application itself, not about any
+        // one endpoint on it. Leaving it on EndpointSchema meant every
+        // schema against the same connection had to redundantly re-specify
+        // a value that can never actually differ between them.
+        public string ApiKeyParamName { get; set; } = "apikey";
+
         // Reachability status — persisted, not re-verified live on every
         // screen load. Never blocks anything (a connection can be saved and
         // used while offline — e.g. pre-configuring before the target server

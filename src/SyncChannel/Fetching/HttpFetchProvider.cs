@@ -10,6 +10,7 @@ namespace SyncChannel.Fetching
     using SyncChannel.Rules;
     using MediaBrowser.Common.Net;
     using MediaBrowser.Model.Logging;
+    using MediaBrowser.Model.Net;
     using System;
     using System.Collections.Generic;
     using System.IO;
@@ -55,7 +56,7 @@ namespace SyncChannel.Fetching
             // sources that ignore it, e.g. Emby.
             options.RequestHeaders["X-Api-Key"] = connection.ApiKey;
 
-            logger.Info("ChannelSync: Fetching {0}?{1}", baseUrl, RedactedQueryString(schema));
+            logger.Info("ChannelSync: Fetching {0}?{1}", baseUrl, RedactedQueryString(schema, connection));
 
             try
             {
@@ -341,12 +342,15 @@ namespace SyncChannel.Fetching
             // that's still more useful than the outer wrapper's generic text.
             return string.IsNullOrEmpty(root.Message) ? ex.Message : root.Message;
         }
-        // Query-param name and any static params (e.g. Limit=25) are
-        // schema-defined, not hardcoded — different sources use different
-        // key parameter names (Emby's is "api_key", not "apikey").
+        // Query-param name comes from the Connection now, not the schema —
+        // it's a fact about the application (Radarr/Sonarr both use
+        // "apikey"; Emby uses "api_key"), fixed regardless of which
+        // endpoint on that application is being called. Static params
+        // (e.g. Limit=25) remain schema-defined, since those genuinely are
+        // per-endpoint.
         private static string BuildQueryString(EndpointSchema schema, ConnectionEntry connection)
         {
-            var paramName = string.IsNullOrWhiteSpace(schema.ApiKeyParamName) ? "apikey" : schema.ApiKeyParamName;
+            var paramName = string.IsNullOrWhiteSpace(connection.ApiKeyParamName) ? "apikey" : connection.ApiKeyParamName;
             var parts = new List<string> { Uri.EscapeDataString(paramName) + "=" + Uri.EscapeDataString(connection.ApiKey) };
 
             if (schema.StaticQueryParams != null)
@@ -362,9 +366,9 @@ namespace SyncChannel.Fetching
         }
 
         // Same as BuildQueryString but with the key's value redacted, for logging.
-        private static string RedactedQueryString(EndpointSchema schema)
+        private static string RedactedQueryString(EndpointSchema schema, ConnectionEntry connection)
         {
-            var paramName = string.IsNullOrWhiteSpace(schema.ApiKeyParamName) ? "apikey" : schema.ApiKeyParamName;
+            var paramName = string.IsNullOrWhiteSpace(connection.ApiKeyParamName) ? "apikey" : connection.ApiKeyParamName;
             var parts = new List<string> { paramName + "=***" };
 
             if (schema.StaticQueryParams != null)
@@ -390,14 +394,17 @@ namespace SyncChannel.Fetching
         public async Task<(bool Success, string Message)> TestReachabilityAsync(
             ConnectionEntry connection, CancellationToken cancellationToken)
         {
+            // Deliberately no apikey/X-Api-Key here — this test only claims
+            // to prove the host is up and speaking HTTP on that port, not
+            // that any credential is valid (see comment above). Auth is
+            // irrelevant to that claim, so it's not sent.
             var baseUrl = connection.BaseUrl.TrimEnd('/');
-            var url = baseUrl + "?apikey=" + Uri.EscapeDataString(connection.ApiKey);
 
-            logger.Info("ChannelSync: Testing connection against {0}?apikey=***", baseUrl);
+            logger.Info("ChannelSync: Testing connection against {0}", baseUrl);
 
             var options = new HttpRequestOptions
             {
-                Url = url,
+                Url = baseUrl,
                 CancellationToken = cancellationToken,
                 TimeoutMs = 4000,
                 // A manual "Test" click must always make a real attempt.
@@ -409,15 +416,25 @@ namespace SyncChannel.Fetching
                 // any network attempt — see Evidence.md.
                 EnableAutomaticTimeouts = false
             };
-            options.RequestHeaders["X-Api-Key"] = connection.ApiKey;
 
             try
             {
                 using (var response = await httpClient.GetResponse(options).ConfigureAwait(false))
                 {
                     logger.Info("ChannelSync: Test connection succeeded against {0}.", baseUrl);
-                    return (true, "Server reachable. This only confirms the host is up — it can't confirm your API key is valid without a specific endpoint to call. Add an Endpoint Schema and use its field-discovery fetch to confirm credentials.");
+                    return (true, "Server reachable.");
                 }
+            }
+            catch (HttpException httpEx)
+            {
+                // Confirmed via live behaviour: CoreHttpClientManager only
+                // throws HttpException once it has actually received and
+                // parsed an HTTP response with a non-success status code —
+                // so getting here IS proof of reachability, not a failure.
+                // A 401/403/404 from an app enforcing auth on every request
+                // (even its root page) still means the host and port are up.
+                logger.Info("ChannelSync: Test connection against {0} got an HTTP response ({1}) — treating as reachable.", baseUrl, httpEx.Message);
+                return (true, "Server reachable (responded with: " + httpEx.Message + "). This only confirms the host is up — it can't confirm your API key is valid without a specific endpoint to call. Add an Endpoint Schema and use its field-discovery fetch to confirm credentials.");
             }
             catch (Exception ex)
             {

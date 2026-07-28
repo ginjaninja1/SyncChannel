@@ -156,14 +156,6 @@ namespace SyncChannel.Configuration
         // root IS the array — unchanged default behavior.
         public string ItemsRootPath { get; set; } = string.Empty;
 
-        // Replaces the old fixed AuthStyle enum, which was never actually
-        // read by HttpFetchProvider (the query param name and X-Api-Key
-        // header were hardcoded regardless of its value — confirmed dead
-        // config). Not every API uses the same key parameter name — Emby
-        // itself uses "api_key", not "apikey" — so this is schema-level,
-        // explicit, and field-driven rather than a fixed style choice.
-        public string ApiKeyParamName { get; set; } = "apikey";
-
         // Additional static query-string parameters always appended, e.g.
         // Limit=25. Plain literal strings, not field mappings — for
         // anything that should reflect a fetched value, use the role

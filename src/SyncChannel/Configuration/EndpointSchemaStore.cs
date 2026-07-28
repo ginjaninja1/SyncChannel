@@ -130,7 +130,6 @@
             SystemType = "radarr",
             ObjectKind = ChannelObjectKind.FlatMedia,
             Path = "/api/v3/movie",
-            ApiKeyParamName = "apikey",
             IdentityField = "titleSlug",
             TitleField = "title",
             OriginalTitleField = "originalTitle",
@@ -184,7 +183,6 @@
             ObjectKind = ChannelObjectKind.Series,
             Path = "/api/v3/series",
             // ...unchanged from here down...
-            ApiKeyParamName = "apikey",
             IdentityField = "titleSlug",
             TitleField = "title",
             OriginalTitleField = "title",
