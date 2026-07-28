@@ -32,6 +32,7 @@ namespace SyncChannel.ScheduledTasks
         private readonly ILogger logger;
         private readonly ChannelIdentityReconciler reconciler;
         private readonly FolderCollageBuilder collageBuilder;
+        private readonly ItemPosterRefreshService posterRefreshService;
 
         public FolderTreeSyncTask(
     FolderTreeStore treeStore,
@@ -45,6 +46,7 @@ namespace SyncChannel.ScheduledTasks
     ITaskManager taskManager,
     ChannelIdentityReconciler reconciler,
     FolderCollageBuilder collageBuilder,
+    ItemPosterRefreshService posterRefreshService,
     ILogger logger)
         {
             this.treeStore = treeStore;
@@ -58,6 +60,7 @@ namespace SyncChannel.ScheduledTasks
             this.taskManager = taskManager;
             this.reconciler = reconciler;
             this.collageBuilder = collageBuilder;
+            this.posterRefreshService = posterRefreshService;
             this.logger = logger;
         }
 
@@ -109,6 +112,11 @@ namespace SyncChannel.ScheduledTasks
             {
                 logger.ErrorException("ChannelSync: RefreshChannelContent failed", ex);
             }
+
+            // Runs right after RefreshChannelContent, since that's what
+            // creates/updates the individual media BaseItems this targets —
+            // see ItemPosterRefreshService for why this exists.
+            RefreshPostersFor(syncedNodes);
 
             progress.Report(80);
             await TriggerRefreshInternetChannels().ConfigureAwait(false);
@@ -162,10 +170,41 @@ namespace SyncChannel.ScheduledTasks
                 catch (Exception ex) { logger.ErrorException("ChannelSync: RefreshChannelContent failed (responsive save)", ex); }
             }
 
+            RefreshPostersFor(syncedNodes);
+
             await TriggerRefreshInternetChannels().ConfigureAwait(false);
 
             // Same ordering fix as the main Execute() path — see comment there.
             await BuildCollagesFor(syncedNodes, cancellationToken).ConfigureAwait(false);
+        }
+
+        // Covers every ObjectKind whose ChannelItemInfo carries an ImageUrl
+        // (FlatMedia, Series, MusicArtistAlbum, PhotoAlbum, GenericContainer's
+        // level-0 folder) — SyncFolderChannel.BuildImageBearingExternalId is
+        // the single source of truth for each kind's id shape and returns
+        // null for DisplayCard (Photo), which self-heals and needs no help
+        // here. See ItemPosterRefreshService's header comment for why this
+        // exists at all.
+        private void RefreshPostersFor(List<(FolderNode Node, FolderCache Cache)> syncedNodes)
+        {
+            foreach (var (node, cache) in syncedNodes)
+            {
+                foreach (var item in cache.Items)
+                {
+                    if (string.IsNullOrEmpty(item.PosterUrl))
+                    {
+                        continue;
+                    }
+
+                    var externalId = SyncFolderChannel.BuildImageBearingExternalId(item, node.Id);
+                    if (externalId == null)
+                    {
+                        continue;
+                    }
+
+                    posterRefreshService.RefreshIfChanged(externalId, item.PosterUrl);
+                }
+            }
         }
 
         private async Task BuildCollagesFor(List<(FolderNode Node, FolderCache Cache)> syncedNodes, CancellationToken cancellationToken)

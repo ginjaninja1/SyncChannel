@@ -4,7 +4,7 @@
 		<AssemblyName>Emby.SyncChannel</AssemblyName>
 		<RootNamespace>SyncChannel</RootNamespace>
 		<LangVersion>latest</LangVersion>
-		<Version>0.0.0.3</Version>
+		<Version>0.0.0.4</Version>
 	</PropertyGroup>
 	<ItemGroup>
 		<Compile Remove="Channels\RadarrComingSoonChannel.cs" />

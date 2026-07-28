@@ -537,3 +537,48 @@ built, not a bug or a browser quirk.
   embedded image/font assets ever seem stuck, the fix path is different
   from the JS/HTML/CSS one described here.
 
+
+- `ChannelManager.GetChannelItemEntity`'s Folder-type switch only specializes
+  `PhotoAlbum`, `Series`, and `Season` into their respective BaseItem
+  subclasses — `Container`, `MusicArtist`, and `MusicAlbum` `FolderType`
+  values all construct a plain `Folder`. `FolderType` beyond those three
+  values carries no BaseItem-construction meaning; treat it as metadata only.
+
+- In the Media-type switch, `ContentType.Trailer` is the only branch that
+  constructs a `Photo` BaseItem — it is load-bearing, not incidental.
+  A `Photo`'s displayed content comes from its own `Path`, set from
+  `ChannelItemInfo.MediaSources[0].Path` — never from `ImageUrl`.
+
+
+`BaseItem.SetImage(ItemImageInfo, index[, deleteExistingImage])` always
+  overwrites an existing image entry's Path/DateModified/dimensions — it is
+  not itself guarded against replacing an existing image, and can optionally
+  delete the old physical file when replacing a local one.
+- The apparent "images never update" behaviour is not a BaseItem limitation —
+  it's specific to `ChannelManager.GetChannelItemEntity`, which only calls
+  `SetImage` when `!baseItem.HasImage(ImageType.Primary)`. Once a channel
+  item has any Primary image, ChannelManager will never touch it again via
+  `ChannelItemInfo.ImageUrl`, correct or not.
+- Workaround: a plugin holding a direct BaseItem reference (e.g. via
+  ILibraryManager.GetItemById) can call SetImage directly, bypassing
+  ChannelManager's guard, to force-refresh a Primary image outside the
+  channel sync's own update path.
+
+  - `BaseItem.SetImage(ItemImageInfo, index[, deleteExistingImage])` always
+  overwrites an existing image entry — it is not itself guarded against
+  replacing an image, and can optionally delete the old physical file.
+- ChannelManager's own image-update path (via ChannelItemInfo.ImageUrl) IS
+  guarded: it only calls SetImage when the BaseItem has no Primary image
+  yet. Once any Primary image exists — including a broken one from a bad
+  URL — ChannelManager will never touch it again via ImageUrl, regardless
+  of Type or FolderType. A plugin holding a direct BaseItem reference can
+  call SetImage itself to bypass this guard.
+- In ChannelManager's Folder-type construction switch, only PhotoAlbum,
+  Series, and Season specialize into their own BaseItem subclass — all
+  other FolderType values construct a plain Folder. FolderType carries no
+  BaseItem-construction meaning beyond those three.
+- In the Media-type switch, ContentType.Trailer is the only branch that
+  constructs a Photo BaseItem. A Photo's displayed content comes from its
+  own Path, reassigned unconditionally from ChannelItemInfo.MediaSources
+  on every sync — never gated, unlike the ImageUrl path above. A Photo-based
+  design therefore self-heals from a bad poster URL; anything else does not.

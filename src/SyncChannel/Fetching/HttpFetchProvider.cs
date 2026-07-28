@@ -240,6 +240,19 @@ namespace SyncChannel.Fetching
         {
             if (string.IsNullOrEmpty(template)) return null;
 
+            // A template needs {value} to be meaningful -- if the source field
+            // resolved blank (e.g. Emby's own image tag is empty for items
+            // with no image), building the URL anyway produces a "valid" but
+            // image-less URL that gets cached as a broken image. Per
+            // ChannelManager.GetChannelItemEntity (see Evidence.md), once
+            // that URL gets applied as a Primary image via ChannelItemInfo.ImageUrl,
+            // ChannelManager itself will never replace it later -- so this
+            // must never happen in the first place.
+            if (template.Contains("{value}") && string.IsNullOrEmpty(value))
+            {
+                return null;
+            }
+
             return template
                 .Replace("{value}", value ?? string.Empty)
                 .Replace("{identity}", identity ?? string.Empty)

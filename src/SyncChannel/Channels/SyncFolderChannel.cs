@@ -46,9 +46,11 @@ namespace SyncChannel.Channels
         private const string ContainerIdPrefix = "syncchannel-container-";
 
         // DisplayCard kind — a picture + name, nothing underneath, nothing
-        // to play. Built as an empty Container folder rather than a Media
-        // item with no working source: an empty folder reads as "nothing
-        // here" cleanly, a play button that errors reads as broken.
+        // to play. Built as Type=Media/MediaType=Video/ContentType=Trailer,
+        // which Emby's ChannelManager construction switch maps to a real
+        // Photo BaseItem (confirmed via ILSpy — see Evidence.md): a Photo
+        // IS its picture, so this reads as "just an image" cleanly, with
+        // no play button to error on click.
         private const string CardIdPrefix = "syncchannel-card-";
 
         private readonly FolderTreeStore treeStore;
@@ -228,6 +230,47 @@ namespace SyncChannel.Channels
 
         internal static string BuildItemId(string folderNodeId, string stableId) =>
             ItemIdPrefix + folderNodeId + "::" + stableId;
+
+        // Returns the ExternalId of the "real" top-level Emby BaseItem a
+        // cached item becomes, for every kind whose ChannelItemInfo carries
+        // an ImageUrl. This is the single source of truth for that id
+        // shape — every Build*Item method below encodes its own prefix +
+        // folderNodeId + "::" + StableId, and ItemPosterRefreshService needs
+        // to reconstruct the same id from outside this class to find and
+        // force-refresh a changed poster (see Evidence.md: ChannelManager
+        // only calls SetImage when the BaseItem has no Primary image yet,
+        // so a changed PosterUrl otherwise never propagates on resync).
+        // Returns null for DisplayCard, which builds a Photo BaseItem
+        // instead — Photo.Path is reassigned unconditionally by
+        // ChannelManager on every sync, so it already self-heals and needs
+        // no help here.
+        internal static string BuildImageBearingExternalId(CachedChannelItem item, string folderNodeId)
+        {
+            switch (item.ObjectKind)
+            {
+                case ChannelObjectKind.Series:
+                    return SeriesIdPrefix + folderNodeId + "::" + item.StableId;
+
+                case ChannelObjectKind.MusicArtistAlbum:
+                    return ArtistIdPrefix + folderNodeId + "::" + item.StableId;
+
+                case ChannelObjectKind.PhotoAlbum:
+                    return PhotoAlbumIdPrefix + folderNodeId + "::" + item.StableId;
+
+                case ChannelObjectKind.GenericContainer:
+                    // Only the level-0 folder carries an ImageUrl (see
+                    // BuildContainerFolderItem) — deeper levels and the
+                    // leaf never do.
+                    return ContainerIdPrefix + "0-" + folderNodeId + "::" + item.StableId;
+
+                case ChannelObjectKind.DisplayCard:
+                    return null;
+
+                case ChannelObjectKind.FlatMedia:
+                default:
+                    return BuildItemId(folderNodeId, item.StableId);
+            }
+        }
 
         // Shared "folderNodeId::stableId" split, used by every kind's
         // top-level item id (flat media, series, artist, photo album,
