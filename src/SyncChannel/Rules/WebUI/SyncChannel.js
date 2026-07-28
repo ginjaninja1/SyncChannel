@@ -1418,6 +1418,8 @@
             AlbumArtistField: '',
             AlbumField: '',
             MediaFileUrlField: '',
+            PosterUrlTemplate: '',
+            MediaFileUrlTemplate: '',
             ProviderIdFields: {},
             Fields: [],
             DetailUrlFormat: ''
@@ -1531,23 +1533,22 @@
         if (schema[role]) slot.classList.add('rcsSlot-filled');
         row.appendChild(slot);
 
-        var exampleEl = document.createElement('span');
-        exampleEl.className = 'fieldDescription';
-        exampleEl.style.marginLeft = '0.5em';
-        exampleEl.style.fontSize = '0.85em';
-        row.appendChild(exampleEl);
-
         var warnEl = document.createElement('div');
         warnEl.className = 'fieldDescription';
         warnEl.style.color = '#e0a030';
         warnEl.style.marginTop = '0.2em';
         row.appendChild(warnEl);
 
+        // Examples live in the slot's title attribute (native hover
+        // tooltip) rather than as a permanently-visible inline element --
+        // an appended sibling element was shifting the layout the drop
+        // detection relies on, which is what broke dragging onto slots.
+        // A title attribute has no layout footprint at all.
         function refreshWarning() {
             var fields = schemaConnectionId ? discoveredFieldsCache[discoveryCacheKey(schemaConnectionId, schema.Id)] : null;
             var field = fields && schema[role] ? fields.filter(function (f) { return f.JsonPath === schema[role]; })[0] : null;
 
-            exampleEl.innerText = (field && field.Examples && field.Examples.length) ? '(e.g. ' + field.Examples.join(', ') + ')' : '';
+            slot.title = (field && field.Examples && field.Examples.length) ? 'e.g. ' + field.Examples.join(', ') : '';
             warnEl.innerText = roleFieldWarning(role, field ? field.Type : null) || '';
         }
         refreshWarning();
@@ -1607,13 +1608,12 @@
                 persistFieldFavorite(schemaId, f.JsonPath, field.IsFavorite);
             });
 
+            // Hover tooltip, not an appended child element -- an inline
+            // sibling here was shifting chip layout and breaking drag/drop.
+            // Appended to makeFieldChip's existing favorite-hint tooltip
+            // rather than overwriting it.
             if (f.Examples && f.Examples.length) {
-                var exampleEl = document.createElement('span');
-                exampleEl.className = 'fieldDescription';
-                exampleEl.style.marginLeft = '0.3em';
-                exampleEl.style.fontSize = '0.8em';
-                exampleEl.innerText = 'e.g. ' + f.Examples.join(', ');
-                chip.appendChild(exampleEl);
+                chip.title = chip.title + ' \u2014 e.g. ' + f.Examples.join(', ');
             }
 
             chipsWrap.appendChild(chip);
@@ -1776,6 +1776,9 @@
             container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'YearField', 'Year field', null, locked));
             container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'OverviewField', 'Overview field', null, locked));
             container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'PosterUrlField', 'Poster URL field', null, locked));
+
+            container.appendChild(esLabeledRow('Poster URL template (optional)', esTextInput(schema.PosterUrlTemplate, locked, function (v) { schema.PosterUrlTemplate = v; }),
+                'Leave blank if Poster URL field above already resolves to a full, ready-to-use URL (e.g. Radarr). Fill in if it only gives a raw id/tag that needs assembling into a URL (e.g. Emby). Placeholders: {value} (the field\'s raw value), {identity}, {baseUrl}, {apikey}. Emby example: {baseUrl}/Items/{identity}/Images/Primary?tag={value}&api_key={apikey}'));
         }
 
         // ---- Kind-specific fields ----
@@ -1796,6 +1799,9 @@
             } else {
                 container.appendChild(buildRoleDropSlot(schema, mapperConnId, 'MediaFileUrlField', 'Media file URL field',
                     'The actual image file URL -- distinct from Poster URL, which is a thumbnail.', locked));
+
+                container.appendChild(esLabeledRow('Media file URL template (optional)', esTextInput(schema.MediaFileUrlTemplate, locked, function (v) { schema.MediaFileUrlTemplate = v; }),
+                    'Same mechanism as Poster URL template above, applied to Media file URL field instead.'));
             }
         }
 

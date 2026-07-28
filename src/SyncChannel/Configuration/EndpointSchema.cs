@@ -199,6 +199,20 @@ namespace SyncChannel.Configuration
         // this field is what gets turned into that MediaSourceInfo.
         public string MediaFileUrlField { get; set; } = string.Empty;
 
+        // Optional. Some sources (Radarr/Sonarr) give a full, ready-to-use
+        // image URL directly — leave this blank and PosterUrlField's raw
+        // value is used as-is. Others (Emby) only give an opaque tag/id
+        // that must be assembled into a URL — e.g. Emby's actual image
+        // location is "{baseUrl}/Items/{id}/Images/Primary?tag={tag}&api_
+        // key={key}", never returned as a literal URL anywhere in its API.
+        // When set, PosterUrlField's raw resolved value substitutes into
+        // {value}; {identity} substitutes the resolved IdentityField value;
+        // {baseUrl} and {apikey} come from the Connection.
+        public string PosterUrlTemplate { get; set; } = string.Empty;
+
+        // Same mechanism as PosterUrlTemplate, for MediaFileUrlField (PhotoAlbum kind).
+        public string MediaFileUrlTemplate { get; set; } = string.Empty;
+
         // Extra dotted paths, beyond the display fields above, surfaced as
         // ProviderIds on the resulting channel item — e.g. Radarr's tmdbId
         // and imdbId, which Emby's own UI recognises under "Tmdb"/"Imdb".

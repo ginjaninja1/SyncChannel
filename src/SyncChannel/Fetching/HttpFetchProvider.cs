@@ -122,6 +122,14 @@ namespace SyncChannel.Fetching
                             continue;
                         }
 
+                        var posterUrl = string.IsNullOrEmpty(schema.PosterUrlTemplate)
+                            ? ResolvePoster(el, schema.PosterUrlField)
+                            : ApplyUrlTemplate(schema.PosterUrlTemplate, ResolveString(el, schema.PosterUrlField), connection, identity);
+
+                        var mediaFileUrl = string.IsNullOrEmpty(schema.MediaFileUrlTemplate)
+                            ? ResolveString(el, schema.MediaFileUrlField)
+                            : ApplyUrlTemplate(schema.MediaFileUrlTemplate, ResolveString(el, schema.MediaFileUrlField), connection, identity);
+
                         var item = new FetchedItem
                         {
                             StableId = identity,
@@ -129,11 +137,11 @@ namespace SyncChannel.Fetching
                             OriginalTitle = ResolveString(el, schema.OriginalTitleField),
                             Overview = ResolveString(el, schema.OverviewField),
                             Year = ResolveInt(el, schema.YearField),
-                            PosterUrl = ResolvePoster(el, schema.PosterUrlField),
+                            PosterUrl = posterUrl,
                             Artist = ResolveString(el, schema.ArtistField),
                             AlbumArtist = ResolveString(el, schema.AlbumArtistField),
                             Album = ResolveString(el, schema.AlbumField),
-                            MediaFileUrl = ResolveString(el, schema.MediaFileUrlField)
+                            MediaFileUrl = mediaFileUrl
                         };
 
                         foreach (var kvp in schema.ProviderIdFields)
@@ -222,6 +230,23 @@ namespace SyncChannel.Fetching
         // rather than a fully generic "nested array lookup" schema field —
         // a future custom schema with a differently-shaped poster field can
         // just leave PosterUrlField blank and get no poster, which is fine.
+        // Substitutes {value} (the raw resolved field value), {identity}
+        // (resolved IdentityField value for this item), {baseUrl} and
+        // {apikey} (from the Connection) into an admin-authored template.
+        // Needed for sources like Emby that only expose an opaque image
+        // tag/id, never a ready-to-use URL — see EndpointSchema.
+        // PosterUrlTemplate for the full reasoning.
+        private static string ApplyUrlTemplate(string template, string value, ConnectionEntry connection, string identity)
+        {
+            if (string.IsNullOrEmpty(template)) return null;
+
+            return template
+                .Replace("{value}", value ?? string.Empty)
+                .Replace("{identity}", identity ?? string.Empty)
+                .Replace("{baseUrl}", connection.BaseUrl.TrimEnd('/'))
+                .Replace("{apikey}", connection.ApiKey ?? string.Empty);
+        }
+
         private static string ResolvePoster(JsonElement el, string posterField)
         {
             if (string.IsNullOrEmpty(posterField) || !el.TryGetProperty(posterField, out var valueEl))
