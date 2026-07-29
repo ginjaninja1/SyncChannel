@@ -15,6 +15,18 @@ namespace SyncChannel.Models
     {
         public string ProviderKey { get; set; } = string.Empty;
 
+        /// <summary>
+        /// "{ConnectionId}|{EndpointSchemaId}" this item was built from.
+        /// Stamped every time ToCache() runs. Used to invalidate stale
+        /// carry-forward data: if a fetch instance is reconfigured to a
+        /// different connection or schema and then fails before its next
+        /// successful sync, old items under the same ProviderKey must NOT
+        /// be kept just because the fetch id matches — their shape (object
+        /// kind, leaf type, etc.) reflects the OLD configuration, not the
+        /// current one. See FolderTreeSyncTask.SyncSingleNode.
+        /// </summary>
+        public string SourceFingerprint { get; set; } = string.Empty;
+
         /// <summary>When this StableId first appeared in this folder's cache — carried forward across syncs, never re-stamped once set.</summary>
         public DateTimeOffset FirstSeenUtc { get; set; }
 

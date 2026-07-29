@@ -296,6 +296,19 @@ namespace SyncChannel.ScheduledTasks
 
             if (!anyAttempted)
             {
+                if (existingCache.Items.Count > 0)
+                {
+                    logger.Info("ChannelSync: Folder '{0}' has no enabled fetches — clearing {1} stale cached item(s).", node.DisplayName, existingCache.Items.Count);
+                    cacheStore.Write(node.Id, new FolderCache
+                    {
+                        Items = new List<CachedChannelItem>(),
+                        LastSyncSucceeded = true,
+                        LastSyncUtc = DateTimeOffset.UtcNow,
+                        StubVideoPath = existingCache.StubVideoPath,
+                        LastCollageStableIds = existingCache.LastCollageStableIds
+                    });
+                }
+
                 return null;
             }
 
