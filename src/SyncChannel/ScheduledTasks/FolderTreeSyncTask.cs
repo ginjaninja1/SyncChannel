@@ -245,6 +245,9 @@ namespace SyncChannel.ScheduledTasks
         /// anymore, since the folder's BaseItem may not exist yet on a
         /// first-ever sync. Returns null if nothing was attempted.
         /// </summary>
+        private static string FetchFingerprint(FetchRuleInstance fetch) =>
+            fetch.ConnectionId + "|" + fetch.EndpointSchemaId;
+
         private async Task<FolderCache> SyncSingleNode(
             FolderNode node,
             Dictionary<string, ConnectionEntry> connections,
@@ -272,11 +275,13 @@ namespace SyncChannel.ScheduledTasks
                     continue;
                 }
 
+                var currentFingerprint = FetchFingerprint(fetch);
+
                 var rawJson = await fetchProvider.FetchRawAsync(connection, schema, cancellationToken).ConfigureAwait(false);
 
                 if (rawJson == null)
                 {
-                    mergedItems.AddRange(existingCache.Items.Where(i => string.Equals(i.ProviderKey, fetch.Id, StringComparison.OrdinalIgnoreCase)));
+                    CarryForwardIfStillValid(node, fetch, currentFingerprint, existingCache, mergedItems);
                     continue;
                 }
 
@@ -286,12 +291,12 @@ namespace SyncChannel.ScheduledTasks
 
                 if (results == null)
                 {
-                    mergedItems.AddRange(existingCache.Items.Where(i => string.Equals(i.ProviderKey, fetch.Id, StringComparison.OrdinalIgnoreCase)));
+                    CarryForwardIfStillValid(node, fetch, currentFingerprint, existingCache, mergedItems);
                     continue;
                 }
 
                 anySucceeded = true;
-                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, schema, priorByStableId)));
+                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, connection.Id, schema, priorByStableId)));
             }
 
             if (!anyAttempted)
@@ -328,9 +333,36 @@ namespace SyncChannel.ScheduledTasks
             return newCache;
         }
 
+        private void CarryForwardIfStillValid(
+            FolderNode node,
+            FetchRuleInstance fetch,
+            string currentFingerprint,
+            FolderCache existingCache,
+            List<CachedChannelItem> mergedItems)
+        {
+            var candidates = existingCache.Items
+                .Where(i => string.Equals(i.ProviderKey, fetch.Id, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var stillValid = candidates
+                .Where(i => string.Equals(i.SourceFingerprint, currentFingerprint, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            var stale = candidates.Count - stillValid.Count;
+            if (stale > 0)
+            {
+                logger.Warn(
+                    "ChannelSync: Folder '{0}' fetch '{1}' failed this sync — discarding {2} stale cached item(s) left over from a prior connection/schema config instead of carrying them forward.",
+                    node.DisplayName, fetch.DisplayLabel, stale);
+            }
+
+            mergedItems.AddRange(stillValid);
+        }
+
         private static CachedChannelItem ToCache(
             FetchedItem item,
             string fetchInstanceId,
+            string connectionId,
             EndpointSchema schema,
             IReadOnlyDictionary<string, CachedChannelItem> priorByStableId)
         {
@@ -341,6 +373,7 @@ namespace SyncChannel.ScheduledTasks
             return new CachedChannelItem
             {
                 ProviderKey = fetchInstanceId,
+                SourceFingerprint = connectionId + "|" + schema.Id,
                 StableId = item.StableId,
                 ObjectKind = schema.ObjectKind,
                 LeafMediaType = schema.LeafMediaType,
