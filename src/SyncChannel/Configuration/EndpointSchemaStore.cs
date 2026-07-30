@@ -84,8 +84,11 @@
         // Always brings the stored built-in in line with the current code
         // definition. Returns true if the file changed (either a fresh add,
         // or an existing stale copy was replaced) so the caller knows
-        // whether to re-save.
-        private static bool ReplaceBuiltIn(EndpointSchemasFile file, EndpointSchema builtIn)
+        // whether to re-save. Compares the whole serialized shape rather
+        // than field-by-field now that fields are FieldMapping objects, not
+        // plain strings — simpler and can't silently miss a new field the
+        // way a hand-maintained field list could.
+        private bool ReplaceBuiltIn(EndpointSchemasFile file, EndpointSchema builtIn)
         {
             var existingIndex = file.Schemas.FindIndex(
                 s => string.Equals(s.Id, builtIn.Id, StringComparison.OrdinalIgnoreCase));
@@ -97,18 +100,7 @@
             }
 
             var existing = file.Schemas[existingIndex];
-            bool identical =
-    existing.SystemType == builtIn.SystemType &&
-    existing.DisplayName == builtIn.DisplayName &&
-    existing.ObjectKind == builtIn.ObjectKind &&
-    existing.Path == builtIn.Path &&
-    existing.IdentityField == builtIn.IdentityField &&
-    existing.TitleField == builtIn.TitleField &&
-    existing.OriginalTitleField == builtIn.OriginalTitleField &&
-    existing.YearField == builtIn.YearField &&
-    existing.OverviewField == builtIn.OverviewField &&
-    existing.PosterUrlField == builtIn.PosterUrlField &&
-    existing.DetailUrlFormat == builtIn.DetailUrlFormat;
+            bool identical = json.SerializeToString(existing) == json.SerializeToString(builtIn);
 
             if (identical)
             {
@@ -118,6 +110,17 @@
             file.Schemas[existingIndex] = builtIn;
             return true;
         }
+
+        // ---- Small helpers so the seeds below read as intent, not
+        // boilerplate segment-list construction. ----
+
+        private static FieldMapping Field(string jsonPath) => new FieldMapping
+        {
+            Segments = new List<MappingSegment>
+            {
+                new MappingSegment { Kind = MappingSegmentKind.Field, Value = jsonPath }
+            }
+        };
 
         // ---- Seeded schemas — the "Radarr support" and "Sonarr support"
         // that used to be C# classes now live here as data. ----
@@ -130,18 +133,21 @@
             SystemType = "radarr",
             ObjectKind = ChannelObjectKind.FlatMedia,
             Path = "/api/v3/movie",
-            IdentityField = "titleSlug",
-            TitleField = "title",
-            OriginalTitleField = "originalTitle",
-            YearField = "year",
-            OverviewField = "overview",
-            PosterUrlField = "images", // resolved specially — see HttpFetchProvider.ResolvePoster
+            IdentityField = Field("titleSlug"),
+            TitleField = Field("title"),
+            OriginalTitleField = Field("originalTitle"),
+            YearField = Field("year"),
+            OverviewField = Field("overview"),
+            // "images" resolves via the images[].coverType=="poster"->remoteUrl
+            // special case inside HttpFetchProvider.ResolveFieldSegmentValue —
+            // a single Field segment is enough, no template needed.
+            PosterUrlField = Field("images"),
             DetailUrlFormat = "{baseUrl}/movie/{identity}",
-            ProviderIdFields = new Dictionary<string, string>
+            ProviderIdFields = new Dictionary<string, FieldMapping>
             {
-                ["Tmdb"] = "tmdbId",
-                ["Imdb"] = "imdbId",
-                ["RadarrId"] = "titleSlug"
+                ["Tmdb"] = Field("tmdbId"),
+                ["Imdb"] = Field("imdbId"),
+                ["RadarrId"] = Field("titleSlug")
             },
             Fields = new List<SchemaField>
             {
@@ -182,18 +188,17 @@
             SystemType = "sonarr",
             ObjectKind = ChannelObjectKind.Series,
             Path = "/api/v3/series",
-            // ...unchanged from here down...
-            IdentityField = "titleSlug",
-            TitleField = "title",
-            OriginalTitleField = "title",
-            YearField = "year",
-            OverviewField = "overview",
-            PosterUrlField = "images",
+            IdentityField = Field("titleSlug"),
+            TitleField = Field("title"),
+            OriginalTitleField = Field("title"),
+            YearField = Field("year"),
+            OverviewField = Field("overview"),
+            PosterUrlField = Field("images"),
             DetailUrlFormat = "{baseUrl}/series/{identity}",
-            ProviderIdFields = new Dictionary<string, string>
+            ProviderIdFields = new Dictionary<string, FieldMapping>
             {
-                ["Tvdb"] = "tvdbId",
-                ["SonarrId"] = "titleSlug"
+                ["Tvdb"] = Field("tvdbId"),
+                ["SonarrId"] = Field("titleSlug")
             },
             Fields = new List<SchemaField>
             {

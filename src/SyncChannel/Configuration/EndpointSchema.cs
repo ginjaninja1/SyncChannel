@@ -1,11 +1,21 @@
 ﻿// The generalization that lets a brand-new REST source (Sonarr, or anything
 // else) be supported as data, not code. An EndpointSchema names one HTTP GET
 // path plus how to read identity/display fields, which fields the rule
-// builder is allowed to filter on, and — as of this version — which Emby
-// channel-object shape the resulting items become. Radarr and Sonarr ship
-// as two seeded EndpointSchema rows (see EndpointSchemaStore.SeedBuiltIns)
-// rather than as their own IFetchProvider classes — HttpFetchProvider is
-// generic against any schema.
+// builder is allowed to filter on, and which Emby channel-object shape the
+// resulting items become. Radarr and Sonarr ship as two seeded EndpointSchema
+// rows (see EndpointSchemaStore.SeedBuiltIns) rather than as their own
+// IFetchProvider classes — HttpFetchProvider is generic against any schema.
+//
+// Every output field (Identity, Title, Poster, ProviderIds, etc.) is a
+// FieldMapping — an ordered list of MappingSegments built from JSON fields,
+// literal text, or connection facts (base URL, api key name/value, the
+// item's own already-resolved identity). This replaced a previous design
+// where each field was a single plain dotted JsonPath string, plus two
+// bespoke {value}/{identity}/{baseUrl}/{apikey} template strings for Poster
+// and MediaFileUrl only. That older shape is fully retired, not kept as a
+// fallback — this is a pre-release plugin; EndpointSchemaStore wipes and
+// reseeds built-ins on every load rather than migrating old data (see
+// EndpointSchemaStore.Load).
 namespace SyncChannel.Configuration
 {
     using System;
@@ -88,7 +98,10 @@ namespace SyncChannel.Configuration
     public class SchemaField
     {
         // Dotted JSON path into each array element, e.g. "ratings.imdb.value".
-        // Same path grammar RuleEvaluator already walks — unchanged.
+        // Same path grammar RuleEvaluator already walks — unchanged. This is
+        // the rule-builder FILTER palette (conditions), separate from the
+        // OUTPUT field mappings below — a field can be filtered on without
+        // ever being mapped to Title/Poster/etc, and vice versa.
         public string JsonPath { get; set; } = string.Empty;
 
         public string DisplayName { get; set; } = string.Empty;
@@ -104,6 +117,60 @@ namespace SyncChannel.Configuration
         // admin can tell what it actually contains without opening the raw
         // response.
         public List<string> Examples { get; set; } = new List<string>();
+    }
+
+    // One piece of a FieldMapping. A mapping is an ordered concatenation of
+    // these — e.g. [CustomText "{baseUrl}/Items/", Field "id", CustomText
+    // "/Images/Primary?tag=", Field "imageTags.primary", CustomText
+    // "&api_key=", ApiKeyValue] resolves to a single URL string per item.
+    public enum MappingSegmentKind
+    {
+        // Value holds a dotted JsonPath, resolved per-item the same way
+        // SchemaField.JsonPath is (via RuleEvaluator.ResolveDisplayValue),
+        // with one addition: if the raw value at that path is an array of
+        // {coverType, remoteUrl} objects (the Radarr/Sonarr images[] shape),
+        // the "poster" entry's remoteUrl is used instead of a generic join —
+        // same special case the old ResolvePoster helper handled, now
+        // available to any field, in any mapping, not just PosterUrlField.
+        Field,
+
+        // Value is the literal text, used as-is, e.g. "?tag=" or "&".
+        CustomText,
+
+        // No Value needed — resolves to Connection.ApiKeyParamName at fetch
+        // time (e.g. "apikey" or "api_key").
+        ApiKeyName,
+
+        // No Value needed — resolves to Connection.ApiKey at fetch time.
+        ApiKeyValue,
+
+        // No Value needed — resolves to Connection.BaseUrl (trimmed of a
+        // trailing slash) at fetch time.
+        BaseUrl,
+
+        // No Value needed — resolves to this item's already-resolved
+        // IdentityField mapping output. Only meaningful on mappings OTHER
+        // than IdentityField itself (a self-reference inside IdentityField
+        // resolves to empty, since identity hasn't been produced yet when
+        // IdentityField is the mapping being resolved).
+        Identity
+    }
+
+    public class MappingSegment
+    {
+        public MappingSegmentKind Kind { get; set; } = MappingSegmentKind.CustomText;
+
+        // Meaningful only for Kind=Field (dotted JsonPath) and
+        // Kind=CustomText (literal text). Ignored for the other three kinds.
+        public string Value { get; set; } = string.Empty;
+    }
+
+    // An orderable, admin-built recipe for one output field. Empty
+    // (no segments) is a valid, common state — it just means that field is
+    // left unmapped and resolves to blank/null.
+    public class FieldMapping
+    {
+        public List<MappingSegment> Segments { get; set; } = new List<MappingSegment>();
     }
 
     public class EndpointSchema
@@ -153,7 +220,9 @@ namespace SyncChannel.Configuration
         // wrap it in an envelope object (e.g. Emby's {"Items": [...],
         // "TotalRecordCount": ...}) instead of returning a bare array at
         // the root (the Radarr/Sonarr shape). Blank means the response
-        // root IS the array — unchanged default behavior.
+        // root IS the array — unchanged default behavior. A property of
+        // the test/discovery result, not an independent setting — the UI
+        // surfaces this immediately after a Test run, not before.
         public string ItemsRootPath { get; set; } = string.Empty;
 
         // Additional static query-string parameters always appended, e.g.
@@ -165,53 +234,55 @@ namespace SyncChannel.Configuration
         // hidden header would be.
         public Dictionary<string, string> StaticQueryParams { get; set; } = new Dictionary<string, string>();
 
-        // Dotted paths resolved against each array element to build a
-        // FetchedItem generically. IdentityField is the only required one —
-        // same "no stable id, drop the item" discipline as the old
-        // TitleSlug-only rule (see Evidence.md).
-        public string IdentityField { get; set; } = string.Empty;
-        public string TitleField { get; set; } = string.Empty;
-        public string OriginalTitleField { get; set; } = string.Empty;
-        public string YearField { get; set; } = string.Empty;
-        public string OverviewField { get; set; } = string.Empty;
-        public string PosterUrlField { get; set; } = string.Empty;
+        // Every field below is a FieldMapping: an ordered recipe built from
+        // JSON fields, literal text, and connection facts (see
+        // MappingSegmentKind). IdentityField is the only one that MUST
+        // resolve non-empty — same "no stable id, drop the item" discipline
+        // as before.
+        public FieldMapping IdentityField { get; set; } = new FieldMapping();
+        public FieldMapping TitleField { get; set; } = new FieldMapping();
+        public FieldMapping OriginalTitleField { get; set; } = new FieldMapping();
+        public FieldMapping YearField { get; set; } = new FieldMapping();
+        public FieldMapping OverviewField { get; set; } = new FieldMapping();
+
+        // Resolves straight to the finished image URL — for sources that
+        // hand back a ready-to-use link, this is just a single Field
+        // segment. For sources that only expose an opaque tag/id (e.g.
+        // Emby's own API), build the full URL here using BaseUrl/Identity/
+        // ApiKeyName/ApiKeyValue segments alongside the Field segment. This
+        // replaces the old separate PosterUrlField + PosterUrlTemplate
+        // pair — there is no template string anymore, the mapping IS the
+        // template.
+        public FieldMapping PosterUrlField { get; set; } = new FieldMapping();
 
         // MusicArtistAlbum only — resolved onto the Audio leaf's
         // IHasArtist/IHasAlbumArtist/IHasMusicAlbum interfaces in
         // GetChannelItemEntity (confirmed via ILSpy — these are read
         // directly off ChannelItemInfo.Artists/AlbumArtists/Album
         // independent of the parent folder's actual runtime type).
-        public string ArtistField { get; set; } = string.Empty;
-        public string AlbumArtistField { get; set; } = string.Empty;
-        public string AlbumField { get; set; } = string.Empty;
+        public FieldMapping ArtistField { get; set; } = new FieldMapping();
+        public FieldMapping AlbumArtistField { get; set; } = new FieldMapping();
+        public FieldMapping AlbumField { get; set; } = new FieldMapping();
 
         // PhotoAlbum only — the actual image file URL, distinct from
         // PosterUrlField (which is a thumbnail/cover, set via ImageUrl).
         // Confirmed via ILSpy: Photo.Path is set from
         // info.MediaSources.FirstOrDefault()?.Path, not from ImageUrl —
-        // this field is what gets turned into that MediaSourceInfo.
-        public string MediaFileUrlField { get; set; } = string.Empty;
-
-        // Optional. Some sources (Radarr/Sonarr) give a full, ready-to-use
-        // image URL directly — leave this blank and PosterUrlField's raw
-        // value is used as-is. Others (Emby) only give an opaque tag/id
-        // that must be assembled into a URL — e.g. Emby's actual image
-        // location is "{baseUrl}/Items/{id}/Images/Primary?tag={tag}&api_
-        // key={key}", never returned as a literal URL anywhere in its API.
-        // When set, PosterUrlField's raw resolved value substitutes into
-        // {value}; {identity} substitutes the resolved IdentityField value;
-        // {baseUrl} and {apikey} come from the Connection.
-        public string PosterUrlTemplate { get; set; } = string.Empty;
-
-        // Same mechanism as PosterUrlTemplate, for MediaFileUrlField (PhotoAlbum kind).
-        public string MediaFileUrlTemplate { get; set; } = string.Empty;
+        // this field is what gets turned into that MediaSourceInfo. Same
+        // "mapping IS the template" replacement as PosterUrlField above.
+        public FieldMapping MediaFileUrlField { get; set; } = new FieldMapping();
 
         // Extra dotted paths, beyond the display fields above, surfaced as
         // ProviderIds on the resulting channel item — e.g. Radarr's tmdbId
         // and imdbId, which Emby's own UI recognises under "Tmdb"/"Imdb".
-        public Dictionary<string, string> ProviderIdFields { get; set; } = new Dictionary<string, string>();
+        // Composable the same way as every other field, so a built-in
+        // schema populates these through the identical mechanism a
+        // custom schema would, rather than a privileged shortcut.
+        public Dictionary<string, FieldMapping> ProviderIdFields { get; set; } = new Dictionary<string, FieldMapping>();
 
-        // The fields available in the rule builder's palette for this schema.
+        // The fields available in the rule builder's FILTER palette for
+        // this schema. Unrelated to the output FieldMappings above — see
+        // SchemaField.JsonPath comment.
         public List<SchemaField> Fields { get; set; } = new List<SchemaField>();
 
         public string DetailUrlFormat { get; set; } = string.Empty; // e.g. "{baseUrl}/movie/{identity}"

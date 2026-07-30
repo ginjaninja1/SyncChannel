@@ -82,11 +82,10 @@ namespace SyncChannel.Fetching
         /// empty list to mean "failed," per the established contract.
         /// </summary>
         /// <param name="connection">
-        /// Needed here (not just in FetchRawAsync) purely to build
+        /// Needed here (not just in FetchRawAsync) to resolve BaseUrl/
+        /// ApiKeyName/ApiKeyValue mapping segments, and to build
         /// ProviderIds["SourceUrl"] (and the provider-specific RadarrId/
-        /// SonarrId link, below) from schema.DetailUrlFormat, which
-        /// substitutes {baseUrl} from the connection and {identity} from
-        /// each resolved item.
+        /// SonarrId link, below) from schema.DetailUrlFormat.
         /// </param>
         public IReadOnlyList<FetchedItem> EvaluateAndMap(string rawJson, ConnectionEntry connection, EndpointSchema schema, RuleNode ruleRoot)
         {
@@ -111,43 +110,44 @@ namespace SyncChannel.Fetching
                             continue;
                         }
 
-                        var identity = ResolveString(el, schema.IdentityField);
+                        // Identity resolves first — every other mapping may
+                        // reference it via a MappingSegmentKind.Identity
+                        // segment. A self-reference inside IdentityField's
+                        // own mapping is passed identity: null, so it just
+                        // resolves blank there (harmless, not circular).
+                        var identity = ResolveMapping(el, schema.IdentityField, connection, null);
                         if (string.IsNullOrEmpty(identity))
                         {
-                            var titleForLog = ResolveString(el, schema.TitleField);
+                            var titleForLog = ResolveMapping(el, schema.TitleField, connection, null);
                             logger.Warn(
-                                "ChannelSync: Item '{0}' dropped from '{1}' — no value at identity field '{2}'.",
+                                "ChannelSync: Item '{0}' dropped from '{1}' — no value from Identity field mapping.",
                                 string.IsNullOrEmpty(titleForLog) ? "(unknown)" : titleForLog,
-                                schema.DisplayName,
-                                schema.IdentityField);
+                                schema.DisplayName);
                             continue;
                         }
-
-                        var posterUrl = string.IsNullOrEmpty(schema.PosterUrlTemplate)
-                            ? ResolvePoster(el, schema.PosterUrlField)
-                            : ApplyUrlTemplate(schema.PosterUrlTemplate, ResolveString(el, schema.PosterUrlField), connection, identity);
-
-                        var mediaFileUrl = string.IsNullOrEmpty(schema.MediaFileUrlTemplate)
-                            ? ResolveString(el, schema.MediaFileUrlField)
-                            : ApplyUrlTemplate(schema.MediaFileUrlTemplate, ResolveString(el, schema.MediaFileUrlField), connection, identity);
 
                         var item = new FetchedItem
                         {
                             StableId = identity,
-                            Title = ResolveString(el, schema.TitleField),
-                            OriginalTitle = ResolveString(el, schema.OriginalTitleField),
-                            Overview = ResolveString(el, schema.OverviewField),
-                            Year = ResolveInt(el, schema.YearField),
-                            PosterUrl = posterUrl,
-                            Artist = ResolveString(el, schema.ArtistField),
-                            AlbumArtist = ResolveString(el, schema.AlbumArtistField),
-                            Album = ResolveString(el, schema.AlbumField),
-                            MediaFileUrl = mediaFileUrl
+                            Title = ResolveMapping(el, schema.TitleField, connection, identity),
+                            OriginalTitle = ResolveMapping(el, schema.OriginalTitleField, connection, identity),
+                            Overview = ResolveMapping(el, schema.OverviewField, connection, identity),
+                            Year = ParseYear(ResolveMapping(el, schema.YearField, connection, identity)),
+                            // Poster/MediaFileUrl null out entirely if any Field
+                            // segment inside them resolved empty — same "never
+                            // cache a URL built from a blank value" discipline
+                            // as the old ApplyUrlTemplate had for {value}, now
+                            // applied per-mapping instead of per-template.
+                            PosterUrl = ResolveMappingOrNullIfAnyFieldBlank(el, schema.PosterUrlField, connection, identity),
+                            Artist = ResolveMapping(el, schema.ArtistField, connection, identity),
+                            AlbumArtist = ResolveMapping(el, schema.AlbumArtistField, connection, identity),
+                            Album = ResolveMapping(el, schema.AlbumField, connection, identity),
+                            MediaFileUrl = ResolveMappingOrNullIfAnyFieldBlank(el, schema.MediaFileUrlField, connection, identity)
                         };
 
                         foreach (var kvp in schema.ProviderIdFields)
                         {
-                            var value = ResolveString(el, kvp.Value);
+                            var value = ResolveMapping(el, kvp.Value, connection, identity);
                             if (!string.IsNullOrEmpty(value))
                             {
                                 item.ProviderIds[kvp.Key] = value;
@@ -159,7 +159,10 @@ namespace SyncChannel.Fetching
                         // provider id + a guessed format string — only the
                         // schema knows its own detail-URL shape, and only the
                         // connection knows its own base URL, so this is the
-                        // one place both are in scope together.
+                        // one place both are in scope together. Unchanged —
+                        // DetailUrlFormat is a simple {baseUrl}/{identity}
+                        // template, not a per-item JSON field mapping, so it
+                        // stays a plain string rather than a FieldMapping.
                         if (!string.IsNullOrEmpty(schema.DetailUrlFormat) && connection != null)
                         {
                             var resolvedUrl = schema.DetailUrlFormat
@@ -204,16 +207,119 @@ namespace SyncChannel.Fetching
             }
         }
 
-        private static string ResolveString(JsonElement el, string fieldPath)
+        // ---- FieldMapping resolution ----
+
+        /// <summary>
+        /// Resolves every segment in a mapping against one item and
+        /// concatenates them into a single string. Never null — an empty/
+        /// null mapping resolves to "". Use
+        /// <see cref="ResolveMappingOrNullIfAnyFieldBlank"/> instead for
+        /// Poster/MediaFileUrl, where a blank source field must suppress
+        /// the whole field rather than produce a broken URL.
+        /// </summary>
+        private static string ResolveMapping(JsonElement el, FieldMapping mapping, ConnectionEntry connection, string identity)
         {
-            if (string.IsNullOrEmpty(fieldPath)) return string.Empty;
-            var value = RuleEvaluator.ResolveDisplayValue(el, fieldPath);
-            return value ?? string.Empty;
+            if (mapping?.Segments == null || mapping.Segments.Count == 0) return string.Empty;
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var seg in mapping.Segments)
+            {
+                sb.Append(ResolveSegment(el, seg, connection, identity));
+            }
+            return sb.ToString();
         }
 
-        private static int? ResolveInt(JsonElement el, string fieldPath)
+        /// <summary>
+        /// Same as <see cref="ResolveMapping"/>, but returns null if the
+        /// mapping is empty OR any Field segment inside it resolved to an
+        /// empty string — mirrors the old ApplyUrlTemplate "a template
+        /// needs {value} to be meaningful" rule (see Evidence.md: once a
+        /// blank/broken URL is applied as a Primary image via
+        /// ChannelItemInfo.ImageUrl, ChannelManager never replaces it
+        /// later, so this must never happen in the first place).
+        /// </summary>
+        private static string ResolveMappingOrNullIfAnyFieldBlank(JsonElement el, FieldMapping mapping, ConnectionEntry connection, string identity)
         {
-            var s = ResolveString(el, fieldPath);
+            if (mapping?.Segments == null || mapping.Segments.Count == 0) return null;
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var seg in mapping.Segments)
+            {
+                var resolved = ResolveSegment(el, seg, connection, identity);
+                if (seg.Kind == MappingSegmentKind.Field && string.IsNullOrEmpty(resolved))
+                {
+                    return null;
+                }
+                sb.Append(resolved);
+            }
+            return sb.ToString();
+        }
+
+        private static string ResolveSegment(JsonElement el, MappingSegment seg, ConnectionEntry connection, string identity)
+        {
+            switch (seg.Kind)
+            {
+                case MappingSegmentKind.Field:
+                    return ResolveFieldSegmentValue(el, seg.Value);
+                case MappingSegmentKind.CustomText:
+                    return seg.Value ?? string.Empty;
+                case MappingSegmentKind.ApiKeyName:
+                    return connection == null ? string.Empty : (string.IsNullOrWhiteSpace(connection.ApiKeyParamName) ? "apikey" : connection.ApiKeyParamName);
+                case MappingSegmentKind.ApiKeyValue:
+                    return connection?.ApiKey ?? string.Empty;
+                case MappingSegmentKind.BaseUrl:
+                    return connection == null ? string.Empty : connection.BaseUrl.TrimEnd('/');
+                case MappingSegmentKind.Identity:
+                    return identity ?? string.Empty;
+                default:
+                    return string.Empty;
+            }
+        }
+
+        // Resolves one JSON field for use inside a mapping. Prefers the
+        // *arr-family images[] -> {coverType:"poster", remoteUrl} special
+        // case (moved here, unchanged in behavior, from the old
+        // ResolvePoster helper) so ANY field in ANY mapping gets that
+        // shape recognized, not just a dedicated PosterUrlField as before.
+        // Falls back to RuleEvaluator.ResolveDisplayValue for every other
+        // shape — same path grammar the rule builder's conditions use.
+        private static string ResolveFieldSegmentValue(JsonElement el, string path)
+        {
+            if (string.IsNullOrEmpty(path)) return string.Empty;
+
+            var imageArrayMatch = TryResolveImageArrayShape(el, path);
+            if (imageArrayMatch != null) return imageArrayMatch;
+
+            return RuleEvaluator.ResolveDisplayValue(el, path) ?? string.Empty;
+        }
+
+        // Radarr/Sonarr both express posters as images[].coverType == "poster" -> remoteUrl.
+        // Kept as a small special case (same shape both built-in schemas share)
+        // rather than a fully generic "nested array lookup" schema field —
+        // a field that isn't shaped like this just falls through to the
+        // generic resolver above.
+        private static string TryResolveImageArrayShape(JsonElement el, string path)
+        {
+            if (!el.TryGetProperty(path, out var valueEl) || valueEl.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var img in valueEl.EnumerateArray())
+            {
+                if (img.TryGetProperty("coverType", out var coverType) &&
+                    string.Equals(coverType.GetString(), "poster", StringComparison.OrdinalIgnoreCase) &&
+                    img.TryGetProperty("remoteUrl", out var remoteUrl))
+                {
+                    return remoteUrl.GetString();
+                }
+            }
+
+            return null;
+        }
+
+        private static int? ParseYear(string s)
+        {
             if (int.TryParse(s, out var n)) return n;
 
             // Falls back to date parsing — a Year role field pointed at a
@@ -226,75 +332,6 @@ namespace SyncChannel.Fetching
             return null;
         }
 
-        // Radarr/Sonarr both express posters as images[].coverType == "poster" -> remoteUrl.
-        // Kept as a small special case (same shape both built-in schemas share)
-        // rather than a fully generic "nested array lookup" schema field —
-        // a future custom schema with a differently-shaped poster field can
-        // just leave PosterUrlField blank and get no poster, which is fine.
-        // Substitutes {value} (the raw resolved field value), {identity}
-        // (resolved IdentityField value for this item), {baseUrl} and
-        // {apikey} (from the Connection) into an admin-authored template.
-        // Needed for sources like Emby that only expose an opaque image
-        // tag/id, never a ready-to-use URL — see EndpointSchema.
-        // PosterUrlTemplate for the full reasoning.
-        private static string ApplyUrlTemplate(string template, string value, ConnectionEntry connection, string identity)
-        {
-            if (string.IsNullOrEmpty(template)) return null;
-
-            // A template needs {value} to be meaningful -- if the source field
-            // resolved blank (e.g. Emby's own image tag is empty for items
-            // with no image), building the URL anyway produces a "valid" but
-            // image-less URL that gets cached as a broken image. Per
-            // ChannelManager.GetChannelItemEntity (see Evidence.md), once
-            // that URL gets applied as a Primary image via ChannelItemInfo.ImageUrl,
-            // ChannelManager itself will never replace it later -- so this
-            // must never happen in the first place.
-            if (template.Contains("{value}") && string.IsNullOrEmpty(value))
-            {
-                return null;
-            }
-
-            return template
-                .Replace("{value}", value ?? string.Empty)
-                .Replace("{identity}", identity ?? string.Empty)
-                .Replace("{baseUrl}", connection.BaseUrl.TrimEnd('/'))
-                .Replace("{apikey}", connection.ApiKey ?? string.Empty);
-        }
-
-        private static string ResolvePoster(JsonElement el, string posterField)
-        {
-            if (string.IsNullOrEmpty(posterField) || !el.TryGetProperty(posterField, out var valueEl))
-            {
-                return null;
-            }
-
-            // Generic case first — most non-*arr sources (Emby included)
-            // express a poster/cover as a plain string field, not a nested
-            // images[] array. Previously this method only understood the
-            // *arr-specific array shape and silently returned null for
-            // everything else, including Emby, even though the field
-            // mapping itself was correct.
-            if (valueEl.ValueKind == JsonValueKind.String)
-            {
-                return valueEl.GetString();
-            }
-
-            // *arr-family fallback: images[].coverType == "poster" -> remoteUrl.
-            if (valueEl.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var img in valueEl.EnumerateArray())
-                {
-                    if (img.TryGetProperty("coverType", out var coverType) &&
-                        string.Equals(coverType.GetString(), "poster", StringComparison.OrdinalIgnoreCase) &&
-                        img.TryGetProperty("remoteUrl", out var remoteUrl))
-                    {
-                        return remoteUrl.GetString();
-                    }
-                }
-            }
-
-            return null;
-        }
         // Builds a user-facing status message from a failed test, since Emby's
         // wrapped HTTP exceptions (e.g. SSL failures) often have a useless outer
         // Message ("...see inner exception.") with the real cause one level down.
@@ -342,6 +379,7 @@ namespace SyncChannel.Fetching
             // that's still more useful than the outer wrapper's generic text.
             return string.IsNullOrEmpty(root.Message) ? ex.Message : root.Message;
         }
+
         // Query-param name comes from the Connection now, not the schema —
         // it's a fact about the application (Radarr/Sonarr both use
         // "apikey"; Emby uses "api_key"), fixed regardless of which
