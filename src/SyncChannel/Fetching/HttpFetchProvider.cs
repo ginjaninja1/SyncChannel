@@ -38,12 +38,11 @@ namespace SyncChannel.Fetching
                 return null;
             }
 
-            if (!string.IsNullOrEmpty(connection.SystemType) && !string.IsNullOrEmpty(schema.SystemType) &&
-                !string.Equals(connection.SystemType, schema.SystemType, StringComparison.OrdinalIgnoreCase))
+            if (schema == null)
             {
                 logger.Warn(
                     "ChannelSync: Fetch skipped — connection '{0}' is system type '{1}' but schema '{2}' is '{3}'.",
-                    connection.DisplayLabel, connection.SystemType, schema.DisplayName, schema.SystemType);
+                    connection.DisplayLabel, connection.SystemType, "(missing)", connection.SystemType);
                 return null;
             }
 
@@ -83,9 +82,8 @@ namespace SyncChannel.Fetching
         /// </summary>
         /// <param name="connection">
         /// Needed here (not just in FetchRawAsync) to resolve BaseUrl/
-        /// ApiKeyName/ApiKeyValue mapping segments, and to build
-        /// ProviderIds["SourceUrl"] (and the provider-specific RadarrId/
-        /// SonarrId link, below) from schema.DetailUrlFormat.
+        /// ApiKeyName/ApiKeyValue mapping segments, including composable
+        /// Provider ID links such as RadarrId and SonarrId.
         /// </param>
         public IReadOnlyList<FetchedItem> EvaluateAndMap(string rawJson, ConnectionEntry connection, EndpointSchema schema, RuleNode ruleRoot)
         {
@@ -154,40 +152,6 @@ namespace SyncChannel.Fetching
                             }
                         }
 
-                        // Click-through URL. Built here rather than
-                        // reconstructed later by an IExternalId from a stored
-                        // provider id + a guessed format string — only the
-                        // schema knows its own detail-URL shape, and only the
-                        // connection knows its own base URL, so this is the
-                        // one place both are in scope together. Unchanged —
-                        // DetailUrlFormat is a simple {baseUrl}/{identity}
-                        // template, not a per-item JSON field mapping, so it
-                        // stays a plain string rather than a FieldMapping.
-                        if (!string.IsNullOrEmpty(schema.DetailUrlFormat) && connection != null)
-                        {
-                            var resolvedUrl = schema.DetailUrlFormat
-                                .Replace("{baseUrl}", connection.BaseUrl.TrimEnd('/'))
-                                .Replace("{identity}", identity);
-
-                            bool isRadarr = string.Equals(schema.SystemType, "radarr", StringComparison.OrdinalIgnoreCase);
-                            bool isSonarr = string.Equals(schema.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase);
-
-                            if (isRadarr)
-                            {
-                                item.ProviderIds["RadarrId"] = resolvedUrl;
-                            }
-                            else if (isSonarr)
-                            {
-                                item.ProviderIds["SonarrId"] = resolvedUrl;
-                            }
-                            else
-                            {
-                                // No dedicated badge for this system — generic "Source" link is the
-                                // only click-through available, so it's worth keeping here.
-                                item.ProviderIds["SourceUrl"] = resolvedUrl;
-                            }
-                        }
-
                         results.Add(item);
                     }
 
@@ -208,6 +172,20 @@ namespace SyncChannel.Fetching
         }
 
         // ---- FieldMapping resolution ----
+
+        /// <summary>
+        /// Public entry point for call sites outside a real fetch (e.g.
+        /// ChannelSyncApiSurface.PreviewRule showing a per-row title) that
+        /// need one resolved field value without running EvaluateAndMap's
+        /// full per-item construction. Same resolution as everywhere else —
+        /// just exposed, since ResolveMapping itself stays private to keep
+        /// EvaluateAndMap's resolution order (identity first, then
+        /// everything else) as the only place that decides it for a real fetch.
+        /// </summary>
+        public static string ResolveMappingPreview(JsonElement el, FieldMapping mapping, ConnectionEntry connection, string identity)
+        {
+            return ResolveMapping(el, mapping, connection, identity);
+        }
 
         /// <summary>
         /// Resolves every segment in a mapping against one item and

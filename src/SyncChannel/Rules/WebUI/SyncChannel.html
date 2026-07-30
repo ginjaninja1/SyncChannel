@@ -26,7 +26,7 @@
 				.mcsTab.mcsTabVisible { display: block; }
 
 				/* ---- Rule set bar ---- */
-				#rcsRuleSetBar {
+				#rcsRuleSetBar, #esBar {
 				display: flex;
 				align-items: center;
 				gap: 0.6em;
@@ -37,8 +37,8 @@
 				background: hsla(var(--theme-primary-color-hue), var(--theme-primary-color-saturation), var(--theme-primary-color-lightness), 0.06);
 				border: 1px solid hsla(var(--theme-primary-color-hue), var(--theme-primary-color-saturation), var(--theme-primary-color-lightness), 0.3);
 				}
-				#rcsRuleSetBar label { font-size: 0.85em; opacity: 0.75; margin-right: 0.2em; }
-				#rcsRuleSetBar select {
+				#rcsRuleSetBar label, #esBar label { font-size: 0.85em; opacity: 0.75; margin-right: 0.2em; }
+				#rcsRuleSetBar select, #esBar select {
 				min-width: 10em;
 				padding: 0.35em 0.5em;
 				border-radius: 6px;
@@ -46,14 +46,14 @@
 				background: rgba(0,0,0,0.2);
 				color: inherit;
 				}
-				#rcsRuleSetBar .rcsIconBtn {
+				#rcsRuleSetBar .rcsIconBtn, #esBar .rcsIconBtn {
 				cursor: pointer;
 				padding: 0.35em 0.6em;
 				border-radius: 6px;
 				border: 1px solid rgba(255,255,255,0.2);
 				font-size: 0.85em;
 				}
-				#rcsRuleSetBar .rcsIconBtn:hover { background: rgba(255,255,255,0.08); }
+				#rcsRuleSetBar .rcsIconBtn:hover, #esBar .rcsIconBtn:hover { background: rgba(255,255,255,0.08); }
 
 				#rcsRulesRoot { display: flex; gap: 1.5em; align-items: flex-start; margin-top: 0.5em; }
 
@@ -219,17 +219,97 @@
 				#ftSaveBar { margin-top: 1em; display: flex; align-items: center; gap: 1em; }
 
 				/* ---- Connections ---- */
-				#connList { max-width: 900px; }
-				.connRow {
-				display: flex; align-items: center; gap: 0.6em; padding: 0.5em 0.6em; margin-bottom: 0.5em;
-				border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); flex-wrap: wrap;
+				.connTableScroll { max-width: 70em; overflow-x: auto; }
+				.connTable {
+				width: 64em; table-layout: fixed; border-collapse: separate; border-spacing: 0;
 				}
-				.connRow input {
+				.connTable th {
+				padding: 0 0.45em 0.2em; text-align: left; font-size: 0.82em; font-weight: normal; opacity: 0.75;
+				}
+				.connTable td {
+				padding: 0.5em 0.45em; vertical-align: middle; background: rgba(255,255,255,0.03);
+				border-top: 1px solid rgba(255,255,255,0.08); border-bottom: 1px solid rgba(255,255,255,0.08);
+				}
+				.connTable .connDataRow td:first-child {
+				border-left: 1px solid rgba(255,255,255,0.08); border-top-left-radius: 8px;
+				}
+				.connTable .connDataRow td:last-child {
+				border-right: 1px solid rgba(255,255,255,0.08); border-top-right-radius: 8px;
+				}
+				.connTable .connStatusRow td {
+				padding-top: 0; border-top: 0; border-right: 1px solid rgba(255,255,255,0.08);
+				border-left: 1px solid rgba(255,255,255,0.08); border-radius: 0 0 8px 8px; padding-bottom: 0.8em;
+				}
+				.connTable input {
 				padding: 0.35em 0.5em; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);
 				background: rgba(0,0,0,0.2); color: inherit;
 				}
+				.connTable td > input, .connTable td > select, .connTable td > span { min-width: 0; max-width: 100%; }
+				.connTable input, .connTable select { width: 100% !important; box-sizing: border-box; }
+				.connTable td > span { box-sizing: border-box; }
+				.connTable td > span > input { flex: 1 1 auto; width: auto !important; }
 				#connStatus { font-size: 0.85em; opacity: 0.7; margin-top: 1em; }
 				#rcsSaveStatus { font-size: 0.85em; opacity: 0.7; }
+
+				/* ---- Endpoint Schema field-mapping builder ---- */
+				.esMapLine {
+				display: flex; align-items: stretch; gap: 0.5em; flex-wrap: wrap; margin-bottom: 0.2em;
+				}
+				.esMapRow {
+				padding: 0.6em; border: 1px solid rgba(255,255,255,0.28); border-radius: 8px;
+				background: rgba(255,255,255,0.025);
+				}
+				.esMapLegend { min-width: 9em; flex-shrink: 0; align-self: center; cursor: help; }
+				.esMapValue {
+				display: flex; flex: 1 1 30em; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 0.4em;
+				min-width: 24em; min-height: 3.8em; padding: 0.6em 0.7em; box-sizing: border-box;
+				border-style: solid; border-color: rgba(255,255,255,0.38); background: rgba(0,0,0,0.11);
+				}
+				.esMapEmptyHint { opacity: 0.6; font-style: italic; }
+				.esMapSeg {
+				display: inline-flex; align-items: center; gap: 0.3em; padding: 0.15em 0.4em; border-radius: 5px;
+				background: rgba(82,158,255,0.18); border: 1px solid rgba(82,158,255,0.4); font-size: 0.85em;
+				}
+				.esMapDragHandle, .esMappingHandle {
+				display: inline-flex; align-items: center; justify-content: center; cursor: grab; opacity: 0.72;
+				font-weight: bold; line-height: 1; user-select: none; touch-action: none;
+				}
+				.esMapDragHandle { padding: 0.2em 0.15em; font-size: 1.1em; }
+				.esMappingHandle {
+				align-self: stretch; min-width: 1.8em; min-height: 2.2em; border: 1px solid rgba(255,255,255,0.2); border-radius: 5px;
+				background: rgba(255,255,255,0.05);
+				}
+				.esMappingHandle.rcsDragOver {
+				border-color: #62d979; background: rgba(98,217,121,0.3); box-shadow: 0 0 0 3px rgba(98,217,121,0.3);
+				}
+				.esMapDragHandle:active, .esMappingHandle:active { cursor: grabbing; }
+				.esMapSeg-customtext { background: rgba(255,181,77,0.18); border-color: rgba(255,181,77,0.4); }
+				.esMapSeg-apikeyname, .esMapSeg-apikeyvalue, .esMapSeg-baseurl, .esMapSeg-identity {
+				background: rgba(255,181,77,0.18); border-color: rgba(255,181,77,0.4);
+				}
+				.esMapSegRemove { opacity: 0.6; cursor: pointer; }
+				.esMapSegRemove:hover { opacity: 1; }
+				.esMapTextInput {
+				border: none; border-bottom: 1px dashed rgba(255,255,255,0.4); background: transparent; color: inherit;
+				font: inherit; padding: 0 0.2em; max-width: 20ch;
+				}
+				.esMapExamples {
+				display: none; align-items: center; flex-wrap: wrap; gap: 0.45em; margin: 0.3em 0 0.25em 11.8em;
+				font-size: 0.82em; opacity: 0.85;
+				}
+				.esMapExample { padding: 0.1em 0.35em; border-radius: 4px; background: rgba(255,255,255,0.07); }
+				.esMapExampleImage { height: 1.6em; width: auto; max-width: 5em; object-fit: contain; vertical-align: middle; }
+				.esProviderIdKeyRow { display: flex; align-items: center; gap: 0.4em; margin-bottom: 0.2em; margin-top: 0.6em; }
+				.esRawJsonToolbar { display: flex; gap: 0.5em; margin: 0.4em 0; }
+				.esRawJsonPre { max-height: 260px; overflow: auto; white-space: pre-wrap; font-size: 0.85em; }
+				.esBuilderPalette {
+				margin: 1em 0; padding: 0.8em; border-radius: 8px;
+				border: 1px solid hsla(var(--theme-primary-color-hue), var(--theme-primary-color-saturation), var(--theme-primary-color-lightness), 0.35);
+				background: hsla(var(--theme-primary-color-hue), var(--theme-primary-color-saturation), var(--theme-primary-color-lightness), 0.05);
+				}
+				.esPaletteTitle { font-weight: 600; margin-bottom: 0.5em; }
+				#esPaletteChips { display:flex; flex-wrap:wrap; gap:0.4em; margin-bottom:0.5em; }
+				.esTestResult { margin-top:0.5em; font-size:0.9em; }
 				.connBadge { font-size: 0.8em; opacity: 0.8; min-width: 9em; }
 			</style>
 
@@ -248,7 +328,18 @@
 					Start here. Saved (URL, API key) pairs, reused across any number of fetches. Test doesn't require saving first — it always checks whatever is currently typed in the fields below. The badge next to each saved connection reflects its last known reachability; it's informational only and never blocks anything, since a connection can be configured before its target server is even online.
 				</div>
 
-				<div id="connList"></div>
+				<div class="connTableScroll">
+					<table class="connTable">
+						<colgroup>
+							<col style="width:9em"><col style="width:9em"><col style="width:15em">
+							<col style="width:7em"><col style="width:13em"><col style="width:7em">
+						</colgroup>
+						<thead>
+							<tr><th>System</th><th>Connection Name</th><th>FQDN</th><th>ApiKey Format</th><th>ApiKey Value</th><th>Actions</th></tr>
+						</thead>
+						<tbody id="connList"></tbody>
+					</table>
+				</div>
 
 				<div style="margin-top: 1em; display:flex; align-items:center; gap:1em;">
 					<button is="emby-button" type="button" id="connAddBtn" class="raised">+ Add Connection</button>
@@ -262,15 +353,29 @@
 			<!-- ================= Endpoint Schemas tab ================= -->
 			<div id="tab-schemas" class="mcsTab">
 				<div class="fieldDescription" style="margin-bottom: 1em;">
-					An Endpoint Schema defines how one HTTP GET endpoint's JSON response maps into a channel item — which field is the title, which shape it becomes (Movie, Series, Music, Photo, or a generic folder tree), and so on. Radarr/Sonarr ship built-in (locked, read-only) — Duplicate one to start from a working example, or create a new schema from scratch to support any other REST source.
+					An Endpoint Schema belongs to one Connection and defines how one HTTP GET endpoint's JSON response maps into a channel item. Choose the Connection first, then select or create its Schema. Radarr/Sonarr connections receive locked built-ins; Duplicate one to make an editable copy.
 				</div>
 
 				<div id="esBar" style="display:flex; align-items:center; gap:0.8em; flex-wrap:wrap; margin-bottom:1em;">
+					<label for="esConnectionSelect">Connection:</label>
+					<select id="esConnectionSelect"></select>
 					<label for="esSchemaSelect">Schema:</label>
 					<select id="esSchemaSelect"></select>
 					<span class="rcsIconBtn" id="esNewSchema" title="Create a new, empty endpoint schema">+ New</span>
-					<span class="rcsIconBtn" id="esDuplicateSchema" title="Duplicate the currently selected schema">Duplicate</span>
-					<span class="rcsIconBtn" id="esDeleteSchema" title="Delete the currently selected schema">Delete</span>
+					<span class="rcsIconBtn" id="esDuplicateSchema" title="Duplicate the currently selected schema">⧉ Duplicate</span>
+					<span class="rcsIconBtn" id="esRenameSchema" title="Rename the currently selected schema">✎ Rename</span>
+					<span class="rcsIconBtn" id="esDeleteSchema" title="Delete the currently selected schema">✕ Delete</span>
+					<span class="rcsIconBtn" id="esExportSchema" title="Copy the currently selected schema as JSON text">Export</span>
+					<span class="rcsIconBtn" id="esImportSchema" title="Paste a schema's JSON text to import it as a new schema">Import</span>
+				</div>
+
+				<div id="esImportExportPanel" style="display:none; margin-bottom:1em;">
+					<textarea id="esImportExportText" rows="10" style="width:100%; font-family:monospace; font-size:0.85em;"></textarea>
+					<div style="margin-top:0.4em; display:flex; gap:0.5em; align-items:center;">
+						<span class="rcsIconBtn" id="esImportExportConfirm"></span>
+						<span class="rcsIconBtn" id="esImportExportCancel">Close</span>
+						<span id="esImportExportStatus" class="fieldDescription"></span>
+					</div>
 				</div>
 
 				<div id="esForm"></div>
@@ -278,6 +383,7 @@
 				<div style="margin-top: 1em; display:flex; gap:0.5em; align-items:center;">
 					<button is="emby-button" type="button" id="esSaveBtn" class="raised button-submit">Save Endpoint Schemas</button>
 					<span id="esSaveStatus"></span>
+					<span id="esDirtyWarning" style="color:#e0a030;"></span>
 				</div>
 			</div>
 
@@ -286,7 +392,7 @@
 				<div id="rcsRuleSetBar">
 					<label for="rcsConnectionSelect">Connection:</label>
 					<select id="rcsConnectionSelect"></select>
-					<label for="rcsSchemaSelect">Endpoint:</label>
+					<label for="rcsSchemaSelect">Schema:</label>
 					<select id="rcsSchemaSelect"></select>
 					<label for="rcsRuleSetSelect">Rule set:</label>
 					<select id="rcsRuleSetSelect"></select>
@@ -356,7 +462,7 @@
 			<!-- ================= Folder Tree tab ================= -->
 			<div id="tab-tree" class="mcsTab">
 				<div class="fieldDescription" style="margin-bottom: 1em;">
-					Build the folder structure users browse in the Sync Channel. Each folder (including the root) can have one or more fetches — each fetch names a Connection, an Endpoint, and a Rule set. Saving is blocked only if a fetch references a connection, endpoint, or rule set that no longer exists at all — those are highlighted in red below, with the specific problem named, so you know exactly what to fix. A connection or rule set that currently exists but is unreachable is not blocked; it will simply be skipped (and logged) until it's reachable again. Saving the folder tree, a connection, or a rule set all trigger an immediate re-sync of whatever's affected — no need to run "Sync Coming Soon Folder Tree" from Scheduled Tasks manually.
+					Build the folder structure users browse in the Sync Channel. Each fetch applies one Rule Set; that Rule Set determines its Schema, and the Schema determines its Connection. The cascading selectors make that ownership journey visible while preventing incompatible combinations.
 				</div>
 
 				<div id="ftRoot"></div>

@@ -12,8 +12,8 @@
     {
         private const string FileName = "endpoint-schemas.json";
 
-        public const string RadarrMoviesId = "builtin-radarr-movies";
-        public const string SonarrSeriesId = "builtin-sonarr-series";
+        public const string RadarrMoviesTemplate = "radarr-movies";
+        public const string SonarrSeriesTemplate = "sonarr-series";
 
         private readonly IApplicationPaths appPaths;
         private readonly IJsonSerializer json;
@@ -41,24 +41,13 @@
                 }
                 catch (Exception ex)
                 {
-                    logger.ErrorException("ChannelSync: Failed to read {0} — reseeding built-ins", ex, path);
+                    logger.ErrorException("ChannelSync: Failed to read {0} — starting with empty endpoint schemas", ex, path);
                 }
             }
 
             file ??= new EndpointSchemasFile();
 
-            // Re-seed (or refresh) built-ins on every load — cheap, idempotent,
-            // and means a user who deletes a built-in by mistake gets it back
-            // rather than silently losing Radarr/Sonarr support. Built-ins are
-            // code-owned (SaveEndpointSchemas already strips and re-adds them
-            // on every save), so an existing on-disk copy is fully REPLACED
-            // with the current code's definition rather than left alone —
-            // otherwise a schema saved before a new field (e.g. SystemType)
-            // was added would keep loading with that field permanently blank.
-            bool changed = ReplaceBuiltIn(file, BuildRadarrMovies());
-            changed |= ReplaceBuiltIn(file, BuildSonarrSeries());
-
-            if (changed || !File.Exists(path))
+            if (!File.Exists(path))
             {
                 Save(file);
             }
@@ -79,6 +68,37 @@
         public EndpointSchema Find(string id)
         {
             return Load().Schemas.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public EndpointSchemasFile EnsureBuiltIns(IEnumerable<ConnectionEntry> connections)
+        {
+            var connectionList = connections.ToList();
+            var expectedBuiltInIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var connection in connectionList)
+            {
+                if (string.Equals(connection.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
+                    expectedBuiltInIds.Add(BuiltInId(RadarrMoviesTemplate, connection.Id));
+                else if (string.Equals(connection.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
+                    expectedBuiltInIds.Add(BuiltInId(SonarrSeriesTemplate, connection.Id));
+            }
+            var file = Load();
+            var changed = file.Schemas.RemoveAll(
+                s => s.IsBuiltIn && !expectedBuiltInIds.Contains(s.Id)) > 0;
+
+            foreach (var connection in connectionList)
+            {
+                EndpointSchema builtIn = null;
+                if (string.Equals(connection.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
+                    builtIn = BuildRadarrMovies(connection.Id);
+                else if (string.Equals(connection.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
+                    builtIn = BuildSonarrSeries(connection.Id);
+
+                if (builtIn != null)
+                    changed |= ReplaceBuiltIn(file, builtIn);
+            }
+
+            if (changed) Save(file);
+            return file;
         }
 
         // Always brings the stored built-in in line with the current code
@@ -122,15 +142,28 @@
             }
         };
 
+        private static FieldMapping ItemUrl(string pathPrefix, string jsonPath) => new FieldMapping
+        {
+            Segments = new List<MappingSegment>
+            {
+                new MappingSegment { Kind = MappingSegmentKind.BaseUrl },
+                new MappingSegment { Kind = MappingSegmentKind.CustomText, Value = pathPrefix },
+                new MappingSegment { Kind = MappingSegmentKind.Field, Value = jsonPath }
+            }
+        };
+
         // ---- Seeded schemas — the "Radarr support" and "Sonarr support"
         // that used to be C# classes now live here as data. ----
 
-        private static EndpointSchema BuildRadarrMovies() => new EndpointSchema
+        public static string BuiltInId(string template, string connectionId) =>
+            "builtin-" + template + "-" + connectionId;
+
+        private static EndpointSchema BuildRadarrMovies(string connectionId) => new EndpointSchema
         {
-            Id = RadarrMoviesId,
+            Id = BuiltInId(RadarrMoviesTemplate, connectionId),
             DisplayName = "Radarr — Movies",
             IsBuiltIn = true,
-            SystemType = "radarr",
+            ConnectionId = connectionId,
             ObjectKind = ChannelObjectKind.FlatMedia,
             Path = "/api/v3/movie",
             IdentityField = Field("titleSlug"),
@@ -142,12 +175,11 @@
             // special case inside HttpFetchProvider.ResolveFieldSegmentValue —
             // a single Field segment is enough, no template needed.
             PosterUrlField = Field("images"),
-            DetailUrlFormat = "{baseUrl}/movie/{identity}",
             ProviderIdFields = new Dictionary<string, FieldMapping>
             {
                 ["Tmdb"] = Field("tmdbId"),
                 ["Imdb"] = Field("imdbId"),
-                ["RadarrId"] = Field("titleSlug")
+                ["RadarrId"] = ItemUrl("/movie/", "titleSlug")
             },
             Fields = new List<SchemaField>
             {
@@ -180,12 +212,12 @@
         // same way README-folder-tree.md flagged the untested DI chain.
         // Treat field names as "best guess from the public Sonarr API docs,"
         // not "confirmed," until someone runs it once and updates this.
-        private static EndpointSchema BuildSonarrSeries() => new EndpointSchema
+        private static EndpointSchema BuildSonarrSeries(string connectionId) => new EndpointSchema
         {
-            Id = SonarrSeriesId,
+            Id = BuiltInId(SonarrSeriesTemplate, connectionId),
             DisplayName = "Sonarr — Series",
             IsBuiltIn = true,
-            SystemType = "sonarr",
+            ConnectionId = connectionId,
             ObjectKind = ChannelObjectKind.Series,
             Path = "/api/v3/series",
             IdentityField = Field("titleSlug"),
@@ -194,11 +226,10 @@
             YearField = Field("year"),
             OverviewField = Field("overview"),
             PosterUrlField = Field("images"),
-            DetailUrlFormat = "{baseUrl}/series/{identity}",
             ProviderIdFields = new Dictionary<string, FieldMapping>
             {
                 ["Tvdb"] = Field("tvdbId"),
-                ["SonarrId"] = Field("titleSlug")
+                ["SonarrId"] = ItemUrl("/series/", "titleSlug")
             },
             Fields = new List<SchemaField>
             {

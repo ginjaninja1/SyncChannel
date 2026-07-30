@@ -43,8 +43,6 @@ namespace SyncChannel.Configuration
         // is also what makes the UI's "only the rule set usually changes"
         // goal possible: editing a fetch is picking from three dropdowns,
         // not filling in a form.
-        public string ConnectionId { get; set; } = string.Empty;
-        public string EndpointSchemaId { get; set; } = string.Empty;
         public string RuleSetId { get; set; } = string.Empty;
 
         public bool Enabled { get; set; } = true;

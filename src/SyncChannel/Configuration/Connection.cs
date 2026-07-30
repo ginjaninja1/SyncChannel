@@ -16,6 +16,10 @@ namespace SyncChannel.Configuration
 
         public string BaseUrl { get; set; } = string.Empty;
 
+        // Distinguishes a preset-managed sample URL from a value the user
+        // deliberately entered.
+        public bool BaseUrlIsUserEntered { get; set; }
+
         public string ApiKey { get; set; } = string.Empty;
 
         // Which product this connection points at — "radarr", "sonarr", etc.

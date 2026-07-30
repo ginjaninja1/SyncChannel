@@ -179,12 +179,10 @@ namespace SyncChannel.Configuration
 
         public string DisplayName { get; set; } = string.Empty;
 
-        // "radarr", "sonarr", etc. — must match ConnectionEntry.SystemType
-        // for a Fetch to be allowed to pair them. A user-authored schema
-        // declares its own value here (free text) rather than picking from a
-        // fixed enum, so a new self-hosted *arr-family app doesn't require a
-        // code change.
-        public string SystemType { get; set; } = string.Empty;
+        // Strict ownership: every schema belongs to exactly one configured
+        // connection. Its system type, URL and credentials are derived from
+        // that connection rather than repeated here.
+        public string ConnectionId { get; set; } = string.Empty;
 
         // Marks built-in seeds so the UI can label them "built-in" (locked,
         // 🔒 glyph — same treatment as built-in RuleSets) and the store can
@@ -285,7 +283,6 @@ namespace SyncChannel.Configuration
         // SchemaField.JsonPath comment.
         public List<SchemaField> Fields { get; set; } = new List<SchemaField>();
 
-        public string DetailUrlFormat { get; set; } = string.Empty; // e.g. "{baseUrl}/movie/{identity}"
     }
 
     public class EndpointSchemasFile

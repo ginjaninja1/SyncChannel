@@ -33,7 +33,6 @@
     [Route("/ChannelSync/RulePreview", "POST")]
     public class PreviewRule : IReturn<object>
     {
-        public string ConnectionId { get; set; }
         public string EndpointSchemaId { get; set; }
         public RuleNode Rule { get; set; }
     }
@@ -67,8 +66,6 @@
     [Route("/ChannelSync/DiscoverFields", "POST")]
     public class DiscoverFields : IReturn<object>
     {
-        public string ConnectionId { get; set; }
-
         // Used when the schema is already saved — looked up via
         // schemaStore.Find. Ignored if DraftSchema is supplied.
         public string EndpointSchemaId { get; set; }
@@ -144,7 +141,43 @@
         public object Post(SaveConnections r)
         {
             var before = connectionsStore.Load().Connections.ToDictionary(c => c.Id, c => c);
+            if (r.Payload.Connections.Any(c => string.IsNullOrWhiteSpace(c.DisplayLabel) || string.IsNullOrWhiteSpace(c.SystemType)) ||
+                r.Payload.Connections.GroupBy(c => c.DisplayLabel.Trim(), StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
+                throw new ArgumentException("Every Connection needs a unique name and a System.");
+
+            var deletedConnectionIds = before.Keys
+                .Where(id => r.Payload.Connections.All(c => !string.Equals(c.Id, id, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            var treeBeforeConnectionSave = treeStore.Load();
+            foreach (var deletedId in deletedConnectionIds)
+            {
+                if (FindFoldersUsingConnection(treeBeforeConnectionSave.RootFolder, deletedId).Count > 0)
+                    throw new ArgumentException("A Connection used by a Folder Fetch cannot be deleted.");
+            }
+            foreach (var connection in r.Payload.Connections)
+            {
+                if (before.TryGetValue(connection.Id, out var prior) &&
+                    !string.Equals(prior.SystemType, connection.SystemType, StringComparison.OrdinalIgnoreCase) &&
+                    FindFoldersUsingConnection(treeBeforeConnectionSave.RootFolder, connection.Id).Count > 0)
+                    throw new ArgumentException("The System of a Connection used by a Folder Fetch cannot be changed.");
+            }
+
+            if (deletedConnectionIds.Count > 0)
+            {
+                var schemaFile = schemaStore.Load();
+                var deletedSchemaIds = schemaFile.Schemas
+                    .Where(s => deletedConnectionIds.Contains(s.ConnectionId, StringComparer.OrdinalIgnoreCase))
+                    .Select(s => s.Id)
+                    .ToList();
+                schemaFile.Schemas.RemoveAll(s => deletedSchemaIds.Contains(s.Id, StringComparer.OrdinalIgnoreCase));
+                schemaStore.Save(schemaFile);
+                var ruleFile = ruleSetStore.Load();
+                ruleFile.RuleSets.RemoveAll(rs => deletedSchemaIds.Contains(rs.EndpointSchemaId, StringComparer.OrdinalIgnoreCase));
+                ruleSetStore.Save(ruleFile);
+            }
             connectionsStore.Save(r.Payload);
+            var ensuredSchemas = schemaStore.EnsureBuiltIns(r.Payload.Connections);
+            ruleSetStore.EnsureBuiltIns(ensuredSchemas.Schemas);
 
             var changedIds = r.Payload.Connections
                 .Where(c => !before.TryGetValue(c.Id, out var prior) ||
@@ -176,12 +209,22 @@
             return new { Success = true, AffectedFolderCount = affectedFolders.Count };
         }
 
-        private static List<string> FindFoldersUsingConnection(FolderNode node, string connectionId)
+        private List<string> FindFoldersUsingConnection(FolderNode node, string connectionId)
         {
             var result = new List<string>();
+            var schemaIds = new HashSet<string>(
+                schemaStore.Load().Schemas
+                    .Where(s => string.Equals(s.ConnectionId, connectionId, StringComparison.OrdinalIgnoreCase))
+                    .Select(s => s.Id),
+                StringComparer.OrdinalIgnoreCase);
+            var ruleSetIds = new HashSet<string>(
+                ruleSetStore.Load().RuleSets
+                    .Where(rs => schemaIds.Contains(rs.EndpointSchemaId))
+                    .Select(rs => rs.Id),
+                StringComparer.OrdinalIgnoreCase);
             void Walk(FolderNode n)
             {
-                if (n.Fetches.Any(f => string.Equals(f.ConnectionId, connectionId, StringComparison.OrdinalIgnoreCase)))
+                if (n.Fetches.Any(f => ruleSetIds.Contains(f.RuleSetId)))
                 {
                     result.Add(n.Id);
                 }
@@ -193,7 +236,7 @@
 
         public object Get(GetEndpointSchemas r)
         {
-            var file = schemaStore.Load();
+            var file = schemaStore.EnsureBuiltIns(connectionsStore.Load().Connections);
             foreach (var schema in file.Schemas)
             {
                 var favorites = favoritesStore.GetFavorites(schema.Id);
@@ -206,6 +249,30 @@
         }
         public object Post(SaveEndpointSchemas r)
         {
+            var connectionIds = new HashSet<string>(
+                connectionsStore.Load().Connections.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
+            if (r.Payload.Schemas.Any(s => !connectionIds.Contains(s.ConnectionId)))
+                throw new ArgumentException("Every Schema must belong to an existing Connection.");
+            if (r.Payload.Schemas.GroupBy(
+                    s => s.ConnectionId + "\n" + (s.DisplayName ?? string.Empty).Trim(),
+                    StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
+                throw new ArgumentException("Schema names must be unique within a Connection.");
+
+            var existingSchemas = schemaStore.Load();
+            var deletedSchemaIds = existingSchemas.Schemas
+                .Where(s => !s.IsBuiltIn && r.Payload.Schemas.All(x => !string.Equals(x.Id, s.Id, StringComparison.OrdinalIgnoreCase)))
+                .Select(s => s.Id)
+                .ToList();
+            var rulesBeforeSchemaSave = ruleSetStore.Load();
+            var deletedRuleIds = rulesBeforeSchemaSave.RuleSets
+                .Where(rs => deletedSchemaIds.Contains(rs.EndpointSchemaId, StringComparer.OrdinalIgnoreCase))
+                .Select(rs => rs.Id)
+                .ToList();
+            if (deletedRuleIds.Any(id => RuleSetStore.FindFoldersUsingRuleSet(treeStore.Load().RootFolder, id).Count > 0))
+                throw new ArgumentException("A Schema used by a Folder Fetch cannot be deleted.");
+            rulesBeforeSchemaSave.RuleSets.RemoveAll(rs => deletedSchemaIds.Contains(rs.EndpointSchemaId, StringComparer.OrdinalIgnoreCase));
+            ruleSetStore.Save(rulesBeforeSchemaSave);
+
             // Built-ins are never overwritten by a client save — the client
             // only ever sends user-authored schemas back for its own edits;
             // built-ins are re-seeded/refreshed by EndpointSchemaStore.Load()
@@ -214,14 +281,32 @@
             var current = schemaStore.Load();
             r.Payload.Schemas.AddRange(current.Schemas.Where(s => s.IsBuiltIn));
             schemaStore.Save(r.Payload);
+            ruleSetStore.EnsureBuiltIns(r.Payload.Schemas);
             return new { Success = true };
         }
 
-        public object Get(GetRuleSets r) => ruleSetStore.Load();
+        public object Get(GetRuleSets r)
+        {
+            var schemas = schemaStore.EnsureBuiltIns(connectionsStore.Load().Connections);
+            return ruleSetStore.EnsureBuiltIns(schemas.Schemas);
+        }
 
         public object Post(SaveRuleSets r)
         {
             var before = ruleSetStore.Load().RuleSets.ToDictionary(rs => rs.Id, rs => rs);
+            var schemaIds = new HashSet<string>(
+                schemaStore.Load().Schemas.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+            if (r.Payload.RuleSets.Any(rs => !schemaIds.Contains(rs.EndpointSchemaId)))
+                throw new ArgumentException("Every Rule Set must belong to an existing Schema.");
+            if (r.Payload.RuleSets.GroupBy(
+                    rs => rs.EndpointSchemaId + "\n" + (rs.Name ?? string.Empty).Trim(),
+                    StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
+                throw new ArgumentException("Rule Set names must be unique within a Schema.");
+            var deletedRuleSetIds = before.Keys
+                .Where(id => r.Payload.RuleSets.All(rs => !string.Equals(rs.Id, id, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+            if (deletedRuleSetIds.Any(id => RuleSetStore.FindFoldersUsingRuleSet(treeStore.Load().RootFolder, id).Count > 0))
+                throw new ArgumentException("A Rule Set used by a Folder Fetch cannot be deleted.");
 
             // Built-ins are never overwritten by a client save — same
             // discipline as SaveEndpointSchemas. Re-seeded/refreshed by
@@ -347,24 +432,16 @@
         }
 
         /// <summary>
-        /// Hard-fail check only: does every fetch's ConnectionId/
-        /// EndpointSchemaId/RuleSetId resolve to something that actually
-        /// exists? This blocks the save — there's no legitimate reason to
-        /// persist a fetch pointing at nothing. Deliberately does NOT check
-        /// live reachability or system-type mismatches here; those are
-        /// soft/informational (surfaced via each connection's persisted
-        /// LastTestSucceeded badge instead), since a connection being
-        /// temporarily offline is not a reason to refuse saving a tree that
-        /// references it correctly.
+        /// A fetch stores only RuleSetId. Validate the complete ownership
+        /// chain so an invalid rule-set/schema/connection graph can never be
+        /// persisted.
         /// </summary>
         private List<FetchValidationError> ValidateFetchReferences(FolderNode root)
         {
             var connectionIds = new HashSet<string>(
                 connectionsStore.Load().Connections.Select(c => c.Id), StringComparer.OrdinalIgnoreCase);
-            var schemaIds = new HashSet<string>(
-                schemaStore.Load().Schemas.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
-            var ruleSetIds = new HashSet<string>(
-                ruleSetStore.Load().RuleSets.Select(rs => rs.Id), StringComparer.OrdinalIgnoreCase);
+            var schemas = schemaStore.Load().Schemas.ToDictionary(s => s.Id, s => s, StringComparer.OrdinalIgnoreCase);
+            var ruleSets = ruleSetStore.Load().RuleSets.ToDictionary(rs => rs.Id, rs => rs, StringComparer.OrdinalIgnoreCase);
 
             var errors = new List<FetchValidationError>();
 
@@ -372,29 +449,7 @@
             {
                 foreach (var fetch in node.Fetches)
                 {
-                    if (!connectionIds.Contains(fetch.ConnectionId))
-                    {
-                        errors.Add(new FetchValidationError
-                        {
-                            FolderId = node.Id,
-                            FetchId = fetch.Id,
-                            Field = "connection",
-                            Message = string.Format("Folder '{0}', fetch '{1}': connection no longer exists.", node.DisplayName, fetch.DisplayLabel)
-                        });
-                    }
-
-                    if (!schemaIds.Contains(fetch.EndpointSchemaId))
-                    {
-                        errors.Add(new FetchValidationError
-                        {
-                            FolderId = node.Id,
-                            FetchId = fetch.Id,
-                            Field = "schema",
-                            Message = string.Format("Folder '{0}', fetch '{1}': endpoint no longer exists.", node.DisplayName, fetch.DisplayLabel)
-                        });
-                    }
-
-                    if (!ruleSetIds.Contains(fetch.RuleSetId))
+                    if (!ruleSets.TryGetValue(fetch.RuleSetId, out var ruleSet))
                     {
                         errors.Add(new FetchValidationError
                         {
@@ -402,6 +457,30 @@
                             FetchId = fetch.Id,
                             Field = "ruleset",
                             Message = string.Format("Folder '{0}', fetch '{1}': rule set no longer exists.", node.DisplayName, fetch.DisplayLabel)
+                        });
+                        continue;
+                    }
+
+                    if (!schemas.TryGetValue(ruleSet.EndpointSchemaId, out var schema))
+                    {
+                        errors.Add(new FetchValidationError
+                        {
+                            FolderId = node.Id,
+                            FetchId = fetch.Id,
+                            Field = "schema",
+                            Message = string.Format("Folder '{0}', fetch '{1}': owning schema no longer exists.", node.DisplayName, fetch.DisplayLabel)
+                        });
+                        continue;
+                    }
+
+                    if (!connectionIds.Contains(schema.ConnectionId))
+                    {
+                        errors.Add(new FetchValidationError
+                        {
+                            FolderId = node.Id,
+                            FetchId = fetch.Id,
+                            Field = "connection",
+                            Message = string.Format("Folder '{0}', fetch '{1}': owning connection no longer exists.", node.DisplayName, fetch.DisplayLabel)
                         });
                     }
                 }
@@ -447,7 +526,8 @@
         {
             var schema = r.DraftSchema ?? schemaStore.Find(r.EndpointSchemaId);
             var connection = connectionsStore.Load().Connections
-                .FirstOrDefault(c => string.Equals(c.Id, r.ConnectionId, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(c => schema != null &&
+                    string.Equals(c.Id, schema.ConnectionId, StringComparison.OrdinalIgnoreCase));
 
             if (schema == null || connection == null)
             {
@@ -470,6 +550,7 @@
             }
 
             List<SchemaField> discovered;
+            int itemCount;
             List<string> arrayFieldCandidates = new List<string>();
             try
             {
@@ -493,6 +574,7 @@
                         return new { Success = false, Message = message, ArrayFieldCandidates = arrayFieldCandidates, RawJson = rawJson };
                     }
 
+                    itemCount = arrayRoot.GetArrayLength();
                     discovered = FieldDiscoveryService.Discover(arrayRoot.GetRawText(), favoritesStore.GetFavorites(schema.Id));
                 }
             }
@@ -502,7 +584,7 @@
                 return new { Success = false, Message = "Response wasn't valid JSON." };
             }
 
-            return new { Success = true, Fields = discovered, ArrayFieldCandidates = arrayFieldCandidates, RawJson = rawJson };
+            return new { Success = true, Fields = discovered, ItemCount = itemCount, ArrayFieldCandidates = arrayFieldCandidates, RawJson = rawJson };
         }
 
         public object Post(SetFieldFavorite r)
@@ -522,7 +604,8 @@
         {
             var schema = schemaStore.Find(request.EndpointSchemaId);
             var connection = connectionsStore.Load().Connections
-                .FirstOrDefault(c => string.Equals(c.Id, request.ConnectionId, StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(c => schema != null &&
+                    string.Equals(c.Id, schema.ConnectionId, StringComparison.OrdinalIgnoreCase));
 
             if (schema == null || connection == null)
             {
@@ -535,7 +618,7 @@
                 };
             }
 
-            var rawJson = lastResponseStore.Read(request.ConnectionId, request.EndpointSchemaId);
+            var rawJson = lastResponseStore.Read(connection.Id, request.EndpointSchemaId);
             bool haveCache = rawJson != "[]";
 
             if (!haveCache)
@@ -589,8 +672,18 @@
                     if (rows.Count < 10)
                     {
                         var values = fields.ToDictionary(f => f, f => RuleEvaluator.ResolveDisplayValue(el, f));
-                        var title = string.IsNullOrEmpty(schema.TitleField) ? "(unknown)" : RuleEvaluator.ResolveDisplayValue(el, schema.TitleField);
-                        rows.Add(new { Title = title, Values = values });
+
+                        // TitleField/IdentityField are FieldMapping objects
+                        // now (composable, not a single JsonPath string) --
+                        // resolved via HttpFetchProvider's public preview
+                        // wrapper rather than RuleEvaluator.ResolveDisplayValue
+                        // directly, so {baseUrl}/{apiKeyName}/{apiKeyValue}/
+                        // {identity} pieces in the mapping resolve correctly
+                        // here too, same as a real fetch would.
+                        var identity = SyncChannel.Fetching.HttpFetchProvider.ResolveMappingPreview(el, schema.IdentityField, connection, null);
+                        var title = SyncChannel.Fetching.HttpFetchProvider.ResolveMappingPreview(el, schema.TitleField, connection, identity);
+                        var displayTitle = string.IsNullOrEmpty(title) ? "(unknown)" : title;
+                        rows.Add(new { Title = displayTitle, Values = values });
                     }
                 }
 

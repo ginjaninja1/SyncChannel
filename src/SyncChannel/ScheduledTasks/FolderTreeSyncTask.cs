@@ -245,8 +245,8 @@ namespace SyncChannel.ScheduledTasks
         /// anymore, since the folder's BaseItem may not exist yet on a
         /// first-ever sync. Returns null if nothing was attempted.
         /// </summary>
-        private static string FetchFingerprint(FetchRuleInstance fetch) =>
-            fetch.ConnectionId + "|" + fetch.EndpointSchemaId;
+        private static string FetchFingerprint(ConnectionEntry connection, EndpointSchema schema) =>
+            connection.Id + "|" + schema.Id;
 
         private async Task<FolderCache> SyncSingleNode(
             FolderNode node,
@@ -267,15 +267,15 @@ namespace SyncChannel.ScheduledTasks
             {
                 anyAttempted = true;
 
-                if (!connections.TryGetValue(fetch.ConnectionId, out var connection) ||
-                    !schemas.TryGetValue(fetch.EndpointSchemaId, out var schema) ||
-                    !ruleSets.TryGetValue(fetch.RuleSetId, out var ruleSet))
+                if (!ruleSets.TryGetValue(fetch.RuleSetId, out var ruleSet) ||
+                    !schemas.TryGetValue(ruleSet.EndpointSchemaId, out var schema) ||
+                    !connections.TryGetValue(schema.ConnectionId, out var connection))
                 {
                     logger.Warn("ChannelSync: Folder '{0}' fetch '{1}' references a missing connection/schema/rule set — skipping.", node.DisplayName, fetch.DisplayLabel);
                     continue;
                 }
 
-                var currentFingerprint = FetchFingerprint(fetch);
+                var currentFingerprint = FetchFingerprint(connection, schema);
 
                 var rawJson = await fetchProvider.FetchRawAsync(connection, schema, cancellationToken).ConfigureAwait(false);
 

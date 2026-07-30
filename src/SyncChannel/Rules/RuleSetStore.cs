@@ -15,9 +15,9 @@
 
         // Fixed ids for shipped defaults — never regenerate these, they're
         // how ReplaceBuiltIn recognizes "this same built-in" across loads.
-        private const string RadarrMonitoredMissingId = "builtin-radarr-monitored-missing";
-        private const string RadarrMonitoredId = "builtin-radarr-monitored";
-        private const string SonarrMonitoredId = "builtin-sonarr-monitored";
+        private const string RadarrMonitoredMissingTemplate = "radarr-monitored-missing";
+        private const string RadarrMonitoredTemplate = "radarr-monitored";
+        private const string SonarrMonitoredTemplate = "sonarr-monitored";
 
         private readonly IApplicationPaths appPaths;
         private readonly IJsonSerializer json;
@@ -45,23 +45,13 @@
                 }
                 catch (Exception ex)
                 {
-                    logger.ErrorException("ChannelSync: Failed to read {0} — reseeding built-in rule sets", ex, path);
+                    logger.ErrorException("ChannelSync: Failed to read {0} — starting with empty rule sets", ex, path);
                 }
             }
 
             file ??= new RuleSetsFile();
 
-            // Re-seed (or refresh) built-ins on every load — same pattern as
-            // EndpointSchemaStore. A built-in is fully REPLACED with the
-            // current code's definition rather than left alone, so a plugin
-            // update can fix a bad default rule for every existing install.
-            bool changed = false;
-            foreach (var builtIn in BuildBuiltInRuleSets())
-            {
-                changed |= ReplaceBuiltIn(file, builtIn);
-            }
-
-            if (changed || !File.Exists(path))
+            if (!File.Exists(path))
             {
                 Save(file);
             }
@@ -87,6 +77,22 @@
         public IEnumerable<RuleSet> ForSchema(string endpointSchemaId)
         {
             return Load().RuleSets.Where(r => string.Equals(r.EndpointSchemaId, endpointSchemaId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public RuleSetsFile EnsureBuiltIns(IEnumerable<Configuration.EndpointSchema> schemas)
+        {
+            var schemaList = schemas.ToList();
+            var liveSchemaIds = new HashSet<string>(
+                schemaList.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+            var file = Load();
+            var changed = file.RuleSets.RemoveAll(
+                r => r.IsBuiltIn && !liveSchemaIds.Contains(r.EndpointSchemaId)) > 0;
+
+            foreach (var builtIn in BuildBuiltInRuleSets(schemaList))
+                changed |= ReplaceBuiltIn(file, builtIn);
+
+            if (changed) Save(file);
+            return file;
         }
 
         /// <summary>Every FolderNode.Fetches entry (recursively) whose RuleSetId matches.</summary>
@@ -142,59 +148,73 @@
 
         // ---- Seeded rule sets — edit these to change what ships with the plugin. ----
 
-        private static IEnumerable<RuleSet> BuildBuiltInRuleSets()
+        private static string BuiltInId(string template, string schemaId) =>
+            "builtin-" + template + "-" + schemaId;
+
+        private static IEnumerable<RuleSet> BuildBuiltInRuleSets(IEnumerable<Configuration.EndpointSchema> schemas)
         {
-            yield return new RuleSet
+            foreach (var schema in schemas.Where(s => s.IsBuiltIn))
             {
-                Id = RadarrMonitoredId,
-                Name = "[Built-in] Monitored",
-                EndpointSchemaId = Configuration.EndpointSchemaStore.RadarrMoviesId,
-                IsBuiltIn = true,
-                Root = new RuleNode
+                if (schema.Id.StartsWith(
+                    "builtin-" + Configuration.EndpointSchemaStore.RadarrMoviesTemplate + "-",
+                    StringComparison.OrdinalIgnoreCase))
                 {
-                    Kind = RuleNodeKind.Group,
-                    LogicOperator = RuleLogicOperator.And,
-                    Children = new List<RuleNode>
+                    yield return new RuleSet
                     {
-                        new RuleNode { Kind = RuleNodeKind.Condition, Field = "monitored", Operator = RuleOperator.EQ, Value = "true" }
-                    }
+                        Id = BuiltInId(RadarrMonitoredTemplate, schema.Id),
+                        Name = "[Built-in] Monitored",
+                        EndpointSchemaId = schema.Id,
+                        IsBuiltIn = true,
+                        Root = new RuleNode
+                        {
+                            Kind = RuleNodeKind.Group,
+                            LogicOperator = RuleLogicOperator.And,
+                            Children = new List<RuleNode>
+                            {
+                                new RuleNode { Kind = RuleNodeKind.Condition, Field = "monitored", Operator = RuleOperator.EQ, Value = "true" }
+                            }
+                        }
+                    };
+                    yield return new RuleSet
+                    {
+                        Id = BuiltInId(RadarrMonitoredMissingTemplate, schema.Id),
+                        Name = "[Built-in] Monitored, missing file",
+                        EndpointSchemaId = schema.Id,
+                        IsBuiltIn = true,
+                        Root = new RuleNode
+                        {
+                            Kind = RuleNodeKind.Group,
+                            LogicOperator = RuleLogicOperator.And,
+                            Children = new List<RuleNode>
+                            {
+                                new RuleNode { Kind = RuleNodeKind.Condition, Field = "monitored", Operator = RuleOperator.EQ, Value = "true" },
+                                new RuleNode { Kind = RuleNodeKind.Condition, Field = "hasFile", Operator = RuleOperator.EQ, Value = "false" }
+                            }
+                        }
+                    };
                 }
-            };
-
-            yield return new RuleSet
-            {
-                Id = RadarrMonitoredMissingId,
-                Name = "[Built-in] Monitored, missing file",
-                EndpointSchemaId = Configuration.EndpointSchemaStore.RadarrMoviesId,
-                IsBuiltIn = true,
-                Root = new RuleNode
+                else if (schema.Id.StartsWith(
+                    "builtin-" + Configuration.EndpointSchemaStore.SonarrSeriesTemplate + "-",
+                    StringComparison.OrdinalIgnoreCase))
                 {
-                    Kind = RuleNodeKind.Group,
-                    LogicOperator = RuleLogicOperator.And,
-                    Children = new List<RuleNode>
+                    yield return new RuleSet
                     {
-                        new RuleNode { Kind = RuleNodeKind.Condition, Field = "monitored", Operator = RuleOperator.EQ, Value = "true" },
-                        new RuleNode { Kind = RuleNodeKind.Condition, Field = "hasFile", Operator = RuleOperator.EQ, Value = "false" }
-                    }
+                        Id = BuiltInId(SonarrMonitoredTemplate, schema.Id),
+                        Name = "[Built-in] Monitored",
+                        EndpointSchemaId = schema.Id,
+                        IsBuiltIn = true,
+                        Root = new RuleNode
+                        {
+                            Kind = RuleNodeKind.Group,
+                            LogicOperator = RuleLogicOperator.And,
+                            Children = new List<RuleNode>
+                            {
+                                new RuleNode { Kind = RuleNodeKind.Condition, Field = "monitored", Operator = RuleOperator.EQ, Value = "true" }
+                            }
+                        }
+                    };
                 }
-            };
-
-            yield return new RuleSet
-            {
-                Id = SonarrMonitoredId,
-                Name = "[Built-in] Monitored",
-                EndpointSchemaId = Configuration.EndpointSchemaStore.SonarrSeriesId,
-                IsBuiltIn = true,
-                Root = new RuleNode
-                {
-                    Kind = RuleNodeKind.Group,
-                    LogicOperator = RuleLogicOperator.And,
-                    Children = new List<RuleNode>
-                    {
-                        new RuleNode { Kind = RuleNodeKind.Condition, Field = "monitored", Operator = RuleOperator.EQ, Value = "true" }
-                    }
-                }
-            };
+            }
         }
     }
 }

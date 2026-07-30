@@ -44,7 +44,7 @@ namespace SyncChannel.Configuration
             {
                 foreach (var segment in itemsRootPath.Split('.'))
                 {
-                    if (current.ValueKind != JsonValueKind.Object || !current.TryGetProperty(segment, out current))
+                    if (current.ValueKind != JsonValueKind.Object || !TryGetPropertyIgnoreCase(current, segment, out current))
                     {
                         arrayElement = default;
                         return false;
@@ -59,6 +59,26 @@ namespace SyncChannel.Configuration
             }
 
             arrayElement = default;
+            return false;
+        }
+
+        private static bool TryGetPropertyIgnoreCase(JsonElement element, string name, out JsonElement value)
+        {
+            if (element.TryGetProperty(name, out value))
+            {
+                return true;
+            }
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+
+            value = default;
             return false;
         }
 
@@ -204,6 +224,22 @@ namespace SyncChannel.Configuration
                         break;
 
                     case JsonValueKind.Object:
+                        // Radarr/Sonarr images[] is an array of
+                        // {coverType, remoteUrl} objects. The mapper resolves
+                        // the parent "images" path to the poster remoteUrl,
+                        // so discovery must expose that same usable value
+                        // (with examples), not only images.coverType and
+                        // images.remoteUrl as generic List fields.
+                        if (TryGetPropertyIgnoreCase(item, "coverType", out var coverType) &&
+                            TryGetPropertyIgnoreCase(item, "remoteUrl", out var remoteUrl) &&
+                            coverType.ValueKind == JsonValueKind.String &&
+                            remoteUrl.ValueKind == JsonValueKind.String &&
+                            string.Equals(coverType.GetString(), "poster", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Merge(typeByPath, orderByPath, path, SchemaFieldType.String);
+                            AddExample(examplesByPath, path, remoteUrl.GetString());
+                        }
+
                         // Collapse: one level of scalar sub-fields off each
                         // array-of-objects entry becomes its own List-typed
                         // field at "arrayName.subfield" — the same shape as
