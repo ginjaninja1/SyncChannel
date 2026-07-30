@@ -323,9 +323,11 @@ namespace SyncChannel.Fetching
                 root = root.InnerException;
             }
 
-            if (ex is OperationCanceledException || root is OperationCanceledException)
+            if ((ex is HttpException httpException && httpException.IsTimedOut) ||
+                ex is OperationCanceledException ||
+                root is OperationCanceledException)
             {
-                return "Timed out — no response from the server within the timeout window.";
+                return "Timed out — no response from that host and port. Check the FQDN and port.";
             }
 
             if (root is System.Net.Sockets.SocketException sockEx)
@@ -337,7 +339,7 @@ namespace SyncChannel.Fetching
                     case System.Net.Sockets.SocketError.HostNotFound:
                         return "Host not found — check the URL/hostname.";
                     case System.Net.Sockets.SocketError.TimedOut:
-                        return "Timed out — host did not respond.";
+                        return "Timed out — no response from that host and port. Check the FQDN and port.";
                     default:
                         return "Network error: " + sockEx.SocketErrorCode;
                 }
@@ -443,14 +445,20 @@ namespace SyncChannel.Fetching
             }
             catch (HttpException httpEx)
             {
-                // Confirmed via live behaviour: CoreHttpClientManager only
-                // throws HttpException once it has actually received and
-                // parsed an HTTP response with a non-success status code —
-                // so getting here IS proof of reachability, not a failure.
-                // A 401/403/404 from an app enforcing auth on every request
-                // (even its root page) still means the host and port are up.
-                logger.Info("ChannelSync: Test connection against {0} got an HTTP response ({1}) — treating as reachable.", baseUrl, httpEx.Message);
-                return (true, "Server reachable (responded with: " + httpEx.Message + "). This only confirms the host is up — it can't confirm your API key is valid without a specific endpoint to call. Add an Endpoint Schema and use its field-discovery fetch to confirm credentials.");
+                // Emby's HTTP layer also wraps connection failures and
+                // timeouts in HttpException. Only a populated HTTP status
+                // proves that a server actually answered on this port.
+                if (!httpEx.IsTimedOut && httpEx.StatusCode.HasValue)
+                {
+                    logger.Info(
+                        "ChannelSync: Test connection against {0} received HTTP {1} — host and port are reachable.",
+                        baseUrl,
+                        (int)httpEx.StatusCode.Value);
+                    return (true, "Server reachable (HTTP " + (int)httpEx.StatusCode.Value + ").");
+                }
+
+                logger.ErrorException("ChannelSync: Test connection failed against {0}", httpEx, baseUrl);
+                return (false, DescribeFailure(httpEx));
             }
             catch (Exception ex)
             {

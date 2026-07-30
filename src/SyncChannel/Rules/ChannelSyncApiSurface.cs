@@ -260,6 +260,12 @@
                 throw new ArgumentException("Schema names must be unique within a Connection.");
 
             var existingSchemas = schemaStore.Load();
+            var schemasBefore = existingSchemas.Schemas.ToDictionary(s => s.Id, s => s);
+            var changedSchemaIds = r.Payload.Schemas
+                .Where(s => !s.IsBuiltIn &&
+                    (!schemasBefore.TryGetValue(s.Id, out var prior) || !EndpointSchemasEqual(prior, s)))
+                .Select(s => s.Id)
+                .ToList();
             var deletedSchemaIds = existingSchemas.Schemas
                 .Where(s => !s.IsBuiltIn && r.Payload.Schemas.All(x => !string.Equals(x.Id, s.Id, StringComparison.OrdinalIgnoreCase)))
                 .Select(s => s.Id)
@@ -283,7 +289,23 @@
             r.Payload.Schemas.AddRange(current.Schemas.Where(s => s.IsBuiltIn));
             schemaStore.Save(r.Payload);
             ruleSetStore.EnsureBuiltIns(r.Payload.Schemas);
-            return new { Success = true };
+
+            var treeAfterSchemaSave = treeStore.Load();
+            var affectedFolders = rulesBeforeSchemaSave.RuleSets
+                .Where(rs => changedSchemaIds.Contains(rs.EndpointSchemaId, StringComparer.OrdinalIgnoreCase))
+                .SelectMany(rs => RuleSetStore.FindFoldersUsingRuleSet(treeAfterSchemaSave.RootFolder, rs.Id))
+                .Distinct()
+                .ToList();
+            if (affectedFolders.Count > 0)
+            {
+                logger.Info(
+                    "ChannelSync: {0} endpoint schema(s) changed — re-syncing {1} affected folder(s).",
+                    changedSchemaIds.Count,
+                    affectedFolders.Count);
+                _ = syncTask.SyncFoldersAndRefresh(affectedFolders, CancellationToken.None);
+            }
+
+            return new { Success = true, AffectedFolderCount = affectedFolders.Count };
         }
 
         public object Get(GetRuleSets r)
@@ -701,6 +723,9 @@
         }
 
         private static bool RuleSetsEqual(RuleSet a, RuleSet b) =>
+            JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
+
+        private static bool EndpointSchemasEqual(EndpointSchema a, EndpointSchema b) =>
             JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
 
         private static List<string> CollectFields(RuleNode node, List<string> acc)

@@ -347,6 +347,9 @@
     var ruleSetsFile = null;        // { RuleSets: [{ Id, Name, EndpointSchemaId, IsBuiltIn, Root }] }
     var currentRuleSetIndex = -1;   // index into ruleSetsFile.RuleSets bound to the canvas
     var ruleSetsSavedSnapshot = null;
+    var ruleSetsHaveUnsavedChanges = false;
+    var ruleSetDomEditedById = {};
+    var builtInRuleDraftRootsById = {};
     var activePageView = null;
     var persistedConnectionIds = {};
     var schemaOperationChangedRuleSets = false;
@@ -1128,10 +1131,20 @@
         strip.innerText = ruleRawStrippedBySchemaId[schemaId] ? 'Show raw response' : 'Strip to valid JSON';
     }
 
-    function scheduleAutoPreview(view) {
+    function scheduleAutoPreview(view, isUserEdit) {
+        if (isUserEdit) {
+            ruleSetsHaveUnsavedChanges = true;
+            var edited = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
+            if (edited) ruleSetDomEditedById[edited.Id] = true;
+        }
         refreshRuleSetDirtyState(view);
         if (autoPreviewTimer) clearTimeout(autoPreviewTimer);
         autoPreviewTimer = setTimeout(function () { runAutoPreview(view); }, 450);
+    }
+
+    function markRuleSetsDirty(view) {
+        ruleSetsHaveUnsavedChanges = true;
+        refreshRuleSetDirtyState(view);
     }
 
     function renderPreviewTable(container, fields, matches) {
@@ -1270,10 +1283,14 @@
         if (currentRuleSetIndex < 0) return;
         var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
         if (!current) return;
-        if (current.IsBuiltIn) return; // read-only — never overwrite from the DOM
+        if (!ruleSetDomEditedById[current.Id]) return;
         var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
         if (!rootGroupEl) return;
-        current.Root = readGroupFromDom(rootGroupEl);
+        if (current.IsBuiltIn) {
+            builtInRuleDraftRootsById[current.Id] = readGroupFromDom(rootGroupEl);
+        } else {
+            current.Root = readGroupFromDom(rootGroupEl);
+        }
     }
 
     function renderRuleSetSelect(view) {
@@ -1327,7 +1344,7 @@
             var lockNotice = document.createElement('div');
             lockNotice.className = 'fieldDescription';
             lockNotice.style.marginBottom = '0.8em';
-            lockNotice.innerText = '🔒 This is a built-in rule set and is read-only. Use Duplicate above to make an editable copy.';
+            lockNotice.innerText = '🔒 This is a protected built-in Rule Set. You can test and edit it here; Save will ask for a new Rule Set name and preserve the built-in unchanged.';
             list.appendChild(lockNotice);
         }
 
@@ -1344,10 +1361,11 @@
                 if (renderToken !== canvasRenderToken) return; // superseded by a newer render — drop this response
                 if (loadingHint.parentNode) loadingHint.parentNode.removeChild(loadingHint);
 
-                var onChange = function () { scheduleAutoPreview(view); };
-                list.appendChild(buildGroupNode(ruleSet.Root || emptyRoot(), true, onChange, connectionId, schemaId));
+                var onChange = function () { scheduleAutoPreview(view, true); };
+                var displayedRoot = builtInRuleDraftRootsById[ruleSet.Id] || ruleSet.Root || emptyRoot();
+                list.appendChild(buildGroupNode(displayedRoot, true, onChange, connectionId, schemaId));
 
-                scheduleAutoPreview(view);
+                scheduleAutoPreview(view, false);
             });
     }
 
@@ -1442,24 +1460,18 @@
         }
     }
 
-    function ruleSetsWithCurrentDom(view) {
-        var candidate = JSON.parse(JSON.stringify(ruleSetsFile || { RuleSets: [] }));
-        var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
-        var current = currentRuleSetIndex >= 0 ? candidate.RuleSets[currentRuleSetIndex] : null;
-        if (rootGroupEl && current && !current.IsBuiltIn) current.Root = readGroupFromDom(rootGroupEl);
-        return candidate;
-    }
-
     function snapshotRuleSetsSaved() {
         ruleSetsSavedSnapshot = JSON.stringify(ruleSetsFile || { RuleSets: [] });
+        ruleSetsHaveUnsavedChanges = false;
+        ruleSetDomEditedById = {};
+        builtInRuleDraftRootsById = {};
     }
 
     function refreshRuleSetDirtyState(view) {
         var warning = view.querySelector('#rcsDirtyWarning');
         var discard = view.querySelector('#rcsDiscardBtn');
         if (!warning) return;
-        var dirty = ruleSetsSavedSnapshot !== null &&
-            JSON.stringify(ruleSetsWithCurrentDom(view)) !== ruleSetsSavedSnapshot;
+        var dirty = ruleSetsSavedSnapshot !== null && ruleSetsHaveUnsavedChanges;
         warning.innerText = dirty ? 'Unsaved changes' : '';
         if (discard) discard.disabled = !dirty;
     }
@@ -1469,6 +1481,9 @@
         var selected = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
         var selectedId = selected ? selected.Id : '';
         ruleSetsFile = JSON.parse(ruleSetsSavedSnapshot);
+        ruleSetsHaveUnsavedChanges = false;
+        ruleSetDomEditedById = {};
+        builtInRuleDraftRootsById = {};
         currentRuleSetIndex = ruleSetsFile.RuleSets.findIndex(function (ruleSet) { return ruleSet.Id === selectedId; });
         var matching = ruleSetsForCurrentSchema(view);
         if (currentRuleSetIndex < 0) currentRuleSetIndex = matching.length ? matching[0].idx : -1;
@@ -1505,7 +1520,30 @@
             if (!proceed) return;
         }
 
-        captureCurrentEditsIntoFile(view);
+        var current = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
+        if (current && current.IsBuiltIn) {
+            var copyName = prompt(
+                'The built-in Rule Set "' + current.Name.replace(/^\[Built-in\]\s*/, '') +
+                '" cannot be overwritten.\nName the new Rule Set for these edits:',
+                current.Name.replace(/^\[Built-in\]\s*/, '') + ' custom');
+            if (!copyName || !copyName.trim()) return;
+            copyName = copyName.trim();
+            if (ruleSetNameExists(current.EndpointSchemaId, copyName)) {
+                Dashboard.alert('Rule Set names must be unique within a Schema.');
+                return;
+            }
+            var copy = JSON.parse(JSON.stringify(current));
+            copy.Id = newId();
+            copy.Name = copyName;
+            copy.IsBuiltIn = false;
+            copy.Root = readGroupFromDom(rootGroupEl);
+            ruleSetsFile.RuleSets.push(copy);
+            currentRuleSetIndex = ruleSetsFile.RuleSets.length - 1;
+            markRuleSetsDirty(view);
+            renderRuleSetSelect(view);
+        } else {
+            captureCurrentEditsIntoFile(view);
+        }
 
         var statusEl = view.querySelector('#rcsSaveStatus');
         statusEl.innerText = 'Saving…';
@@ -1520,16 +1558,7 @@
             snapshotRuleSetsSaved();
             refreshRuleSetDirtyState(view);
             var affected = (result && result.AffectedFolderCount) || 0;
-            if (affected > 0) {
-                statusEl.innerText =
-                    'Saved ' + ruleSetsFile.RuleSets.length + ' rule set(s). Re-syncing ' + affected +
-                    ' folder(s) that use a changed rule set now — check the server log for fetch activity.';
-            } else {
-                statusEl.innerText =
-                    'Saved ' + ruleSetsFile.RuleSets.length + ' rule set(s). Nothing was re-synced: no folder in the ' +
-                    'Folder Tree tab currently has a Fetch using this rule set yet, so there is nothing to fetch. ' +
-                    'Add a Fetch on the Folder Tree tab referencing it, then Save Folder Tree, to actually run it.';
-            }
+            statusEl.innerText = affected > 0 ? 'Saved. Folder tree resync started.' : 'Saved.';
         }).catch(function () {
             statusEl.innerText = '';
             Dashboard.alert('Save failed — see server log.');
@@ -1548,6 +1577,7 @@
             if (!name) return;
             if (ruleSetNameExists(schemaId, name)) { Dashboard.alert('Rule Set names must be unique within a Schema.'); return; }
             ruleSetsFile.RuleSets.push({ Id: newId(), Name: name.trim(), EndpointSchemaId: schemaId, IsBuiltIn: false, Root: emptyRoot() });
+            markRuleSetsDirty(view);
             switchRuleSetTo(view, ruleSetsFile.RuleSets.length - 1);
         });
 
@@ -1563,7 +1593,11 @@
             clone.Id = newId();
             clone.Name = name.trim();
             clone.IsBuiltIn = false;
+            if (builtInRuleDraftRootsById[source.Id]) {
+                clone.Root = JSON.parse(JSON.stringify(builtInRuleDraftRootsById[source.Id]));
+            }
             ruleSetsFile.RuleSets.push(clone);
+            markRuleSetsDirty(view);
             switchRuleSetTo(view, ruleSetsFile.RuleSets.length - 1);
         });
 
@@ -1575,6 +1609,7 @@
             if (!name) return;
             if (ruleSetNameExists(current.EndpointSchemaId, name, current.Id)) { Dashboard.alert('Rule Set names must be unique within a Schema.'); return; }
             current.Name = name.trim();
+            markRuleSetsDirty(view);
             renderRuleSetSelect(view);
         });
 
@@ -1593,9 +1628,88 @@
                 return;
             }
             ruleSetsFile.RuleSets.splice(currentRuleSetIndex, 1);
+            markRuleSetsDirty(view);
             var remaining = ruleSetsForCurrentSchema(view);
             switchRuleSetTo(view, remaining.length ? remaining[0].idx : -1);
         });
+
+        view.querySelector('#rcsExportRuleSet').addEventListener('click', function () {
+            exportRuleSet(view);
+        });
+        view.querySelector('#rcsImportRuleSet').addEventListener('click', function () {
+            importRuleSet(view);
+        });
+    }
+
+    function exportRuleSet(view) {
+        var source = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
+        if (!source) { Dashboard.alert('No Rule Set selected to export.'); return; }
+
+        var exported = JSON.parse(JSON.stringify(source));
+        var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
+        if (rootGroupEl) exported.Root = readGroupFromDom(rootGroupEl);
+
+        var panel = view.querySelector('#rcsImportExportPanel');
+        var text = view.querySelector('#rcsImportExportText');
+        var status = view.querySelector('#rcsImportExportStatus');
+        var confirmBtn = view.querySelector('#rcsImportExportConfirm');
+        text.value = JSON.stringify(exported, null, 2);
+        status.innerText = 'Copy this Rule Set JSON.';
+        confirmBtn.innerText = 'Copy to clipboard';
+        confirmBtn.onclick = function () {
+            copyTextToClipboard(text.value).then(function () {
+                status.innerText = 'Copied to clipboard.';
+            }).catch(function () {
+                text.select();
+                status.innerText = 'Copy was blocked; the text is selected for manual copying.';
+            });
+        };
+        panel.style.display = '';
+        text.focus();
+        text.select();
+    }
+
+    function importRuleSet(view) {
+        var schemaId = view.querySelector('#rcsSchemaSelect').value;
+        if (!schemaId) { Dashboard.alert('Choose a Schema before importing a Rule Set.'); return; }
+
+        var panel = view.querySelector('#rcsImportExportPanel');
+        var text = view.querySelector('#rcsImportExportText');
+        var status = view.querySelector('#rcsImportExportStatus');
+        var confirmBtn = view.querySelector('#rcsImportExportConfirm');
+        text.value = '';
+        status.innerText = 'Paste an exported Rule Set, then click Import.';
+        confirmBtn.innerText = 'Import';
+        confirmBtn.onclick = function () {
+            var parsed;
+            try {
+                parsed = JSON.parse(text.value);
+            } catch (e) {
+                status.innerText = 'Not valid JSON.';
+                return;
+            }
+            if (!parsed || typeof parsed !== 'object' || !parsed.Root) {
+                status.innerText = 'This does not look like a Rule Set.';
+                return;
+            }
+            parsed.Id = newId();
+            parsed.EndpointSchemaId = schemaId;
+            parsed.IsBuiltIn = false;
+            parsed.Name = (parsed.Name || 'Imported Rule Set').replace(/^\[Built-in\]\s*/, '');
+            if (ruleSetNameExists(schemaId, parsed.Name)) {
+                status.innerText = 'A Rule Set with that name already exists for this Schema. Change Name in the JSON before importing.';
+                return;
+            }
+            ruleSetsFile.RuleSets.push(parsed);
+            currentRuleSetIndex = ruleSetsFile.RuleSets.length - 1;
+            markRuleSetsDirty(view);
+            renderRuleSetSelect(view);
+            renderCanvasForCurrentIndex(view);
+            panel.style.display = 'none';
+            refreshRuleSetDirtyState(view);
+        };
+        panel.style.display = '';
+        text.focus();
     }
 
     // ===================================================================
@@ -1847,7 +1961,7 @@
         input.disabled = !!disabled;
         input.addEventListener('input', function (e) {
             onChange(e.target.value);
-            if (activePageView) refreshSchemaDirtyState(activePageView);
+            if (activePageView) markSchemasDirty(activePageView);
         });
         return input;
     }
@@ -1864,7 +1978,7 @@
         });
         select.addEventListener('change', function (e) {
             onChange(e.target.value);
-            if (activePageView) refreshSchemaDirtyState(activePageView);
+            if (activePageView) markSchemasDirty(activePageView);
         });
         return select;
     }
@@ -1879,7 +1993,7 @@
         input.addEventListener('input', function (e) {
             var n = parseInt(e.target.value, 10);
             onChange(isNaN(n) ? 0 : n);
-            if (activePageView) refreshSchemaDirtyState(activePageView);
+            if (activePageView) markSchemasDirty(activePageView);
         });
         return input;
     }
@@ -2031,6 +2145,7 @@
             clearBtn.innerText = 'Clear';
             clearBtn.addEventListener('click', function () {
                 mapping.Segments = [];
+                if (activePageView) markSchemasDirty(activePageView);
                 renderSegments();
             });
             line.appendChild(clearBtn);
@@ -2044,7 +2159,6 @@
 
         var examplesEl = document.createElement('div');
         examplesEl.className = 'esMapExamples';
-        row.appendChild(examplesEl);
 
         var warnEl = document.createElement('div');
         warnEl.className = 'fieldDescription';
@@ -2167,7 +2281,7 @@
                         input.size = Math.min(20, Math.max(3, e.target.value.length));
                         chip.title = 'Literal text: ' + (e.target.value || '(empty)');
                         refreshExamples();
-                        if (activePageView) refreshSchemaDirtyState(activePageView);
+                        if (activePageView) markSchemasDirty(activePageView);
                     });
                     chip.appendChild(input);
                 } else {
@@ -2197,6 +2311,7 @@
                     xBtn.title = 'Remove this piece';
                     xBtn.addEventListener('click', function () {
                         mapping.Segments.splice(idx, 1);
+                        if (activePageView) markSchemasDirty(activePageView);
                         renderSegments();
                         refreshWarning();
                     });
@@ -2206,6 +2321,11 @@
                 valueEl.appendChild(chip);
             });
 
+            // Native browser title tooltips can only contain text. Image
+            // examples therefore remain inside the mapping's permanent
+            // bounding box and appear, right-aligned in a row, while its
+            // legend is hovered or focused.
+            valueEl.appendChild(examplesEl);
             refreshWarning();
             refreshExamples();
             if (activePageView) refreshSchemaDirtyState(activePageView);
@@ -2223,7 +2343,7 @@
                 var insertAt = findMappingInsertionIndex(valueEl, clientX, null, clientYIgnored);
                 mapping.Segments.splice(insertAt, 0, seg);
                 renderSegments();
-                if (activePageView) refreshSchemaDirtyState(activePageView);
+                if (activePageView) markSchemasDirty(activePageView);
                 if (seg.Kind === 'CustomText') {
                     var inputs = valueEl.querySelectorAll('.esMapTextInput');
                     if (inputs.length) inputs[Math.min(insertAt, inputs.length - 1)].focus();
@@ -2251,7 +2371,7 @@
                     });
                 }
                 renderSegments();
-                if (activePageView) refreshSchemaDirtyState(activePageView);
+                if (activePageView) markSchemasDirty(activePageView);
             });
 
             registerDropTarget(valueEl, ['mapmapping'], function (value, reorderElement, clientY, clientX) {
@@ -2264,7 +2384,7 @@
                 var insertAt = findMappingInsertionIndex(valueEl, clientX, null, clientY);
                 Array.prototype.splice.apply(mapping.Segments, [insertAt, 0].concat(copiedSegments));
                 renderSegments();
-                if (activePageView) refreshSchemaDirtyState(activePageView);
+                if (activePageView) markSchemasDirty(activePageView);
             });
 
             registerDropTarget(mappingHandle, ['mapmapping'], function (value) {
@@ -2275,7 +2395,7 @@
                     return { Kind: seg.Kind, Value: seg.Value || '' };
                 });
                 renderSegments();
-                if (activePageView) refreshSchemaDirtyState(activePageView);
+                if (activePageView) markSchemasDirty(activePageView);
             });
         }
 
@@ -2665,6 +2785,7 @@
                 if (!newKey || newKey === key || schema.ProviderIdFields.hasOwnProperty(newKey)) { e.target.value = key; return; }
                 schema.ProviderIdFields[newKey] = schema.ProviderIdFields[key];
                 delete schema.ProviderIdFields[key];
+                markSchemasDirty(view);
                 renderSchemaForm(view);
             });
             keyRow.appendChild(keyInput);
@@ -2675,6 +2796,7 @@
                 removeBtn.innerText = 'Remove';
                 removeBtn.addEventListener('click', function () {
                     delete schema.ProviderIdFields[key];
+                    markSchemasDirty(view);
                     renderSchemaForm(view);
                 });
                 keyRow.appendChild(removeBtn);
@@ -2692,6 +2814,7 @@
                 var n = 1, newKey = 'ProviderId';
                 while (schema.ProviderIdFields.hasOwnProperty(newKey)) { newKey = 'ProviderId' + (++n); }
                 schema.ProviderIdFields[newKey] = { Segments: [] };
+                markSchemasDirty(view);
                 renderSchemaForm(view);
             });
             wrap.appendChild(addBtn);
@@ -2734,7 +2857,10 @@
             valInput.value = schema.StaticQueryParams[key];
             valInput.placeholder = 'value, e.g. 25';
             valInput.disabled = !!locked;
-            valInput.addEventListener('input', function (e) { schema.StaticQueryParams[key] = e.target.value; });
+            valInput.addEventListener('input', function (e) {
+                schema.StaticQueryParams[key] = e.target.value;
+                markSchemasDirty(view);
+            });
 
             keyInput.addEventListener('change', function (e) {
                 var newKey = e.target.value;
@@ -2742,6 +2868,7 @@
                 var val = schema.StaticQueryParams[key];
                 delete schema.StaticQueryParams[key];
                 schema.StaticQueryParams[newKey] = val;
+                markSchemasDirty(view);
                 renderSchemaForm(view);
             });
 
@@ -2754,6 +2881,7 @@
                 removeBtn.innerText = 'Remove';
                 removeBtn.addEventListener('click', function () {
                     delete schema.StaticQueryParams[key];
+                    markSchemasDirty(view);
                     renderSchemaForm(view);
                 });
                 row.appendChild(removeBtn);
@@ -2773,6 +2901,7 @@
                     newKey = 'param' + (++n);
                 }
                 schema.StaticQueryParams[newKey] = '';
+                markSchemasDirty(view);
                 renderSchemaForm(view);
             });
             wrap.appendChild(addBtn);
@@ -2805,6 +2934,7 @@
     function runSchemaDiscovery(view, schema, connectionId, forceRefresh) {
         var requestToken = ++schemaDiscoveryToken;
         var requestedSchemaId = schema.Id;
+        var schemaBeforeDiscovery = JSON.stringify(schema);
         schemaDiscoveryBusyBySchemaId[schema.Id] = true;
         schemaTestStatusBySchemaId[schema.Id] = 'Testing ' + (schema.Path || 'endpoint') + '…';
         var candidatesHolder = view.querySelector('#esArrayCandidates');
@@ -2834,6 +2964,7 @@
                 if (candidates.length === 1 && rootCanBeSuggested) {
                     schema.ItemsRootPath = candidates[0];
                     autoSuggestedItemsRootBySchemaId[schema.Id] = candidates[0];
+                    if (JSON.stringify(schema) !== schemaBeforeDiscovery) markSchemasDirty(view);
                     schemaTestStatusBySchemaId[schema.Id] =
                         'Found an item array wrapped in "' + candidates[0] + '". Inspecting its objects…';
                     renderSchemaForm(view);
@@ -2908,6 +3039,7 @@
                 }
             }
             autoSuggestedMappingsBySchemaId[schema.Id] = autoMappings;
+            if (JSON.stringify(schema) !== schemaBeforeDiscovery) markSchemasDirty(view);
 
             var objectLabel = endpointObjectLabel(schema);
             var wrapperText = schema.ItemsRootPath ? ' wrapped in "' + schema.ItemsRootPath + '"' : ' at the response root';
@@ -2957,6 +3089,7 @@
                 chip.addEventListener('click', function () {
                     schema.ItemsRootPath = key;
                     autoSuggestedItemsRootBySchemaId[schema.Id] = key;
+                    markSchemasDirty(view);
                     schemaTestStatusBySchemaId[schema.Id] = 'Inspecting objects wrapped in "' + key + '"…';
                     renderSchemaForm(view);
                     runSchemaDiscovery(view, schema, connectionId, false);
@@ -3020,6 +3153,7 @@
         var fresh = newEmptySchema(connectionId, name.trim());
         schemas.push(fresh);
         currentSchemaId = fresh.Id;
+        markSchemasDirty(view);
         renderSchemaSelect(view);
         renderSchemaForm(view);
     }
@@ -3043,6 +3177,7 @@
         clone.ConnectionId = connections[targetIndex].Id;
         clone.IsBuiltIn = false;
         schemas.push(clone);
+        markSchemasDirty(view);
         if (confirm('Copy this schema\'s Rule Sets too?')) {
             ruleSetsFile.RuleSets
                 .filter(function (rs) { return rs.EndpointSchemaId === source.Id; })
@@ -3054,6 +3189,7 @@
                     ruleSetsFile.RuleSets.push(copy);
                 });
             schemaOperationChangedRuleSets = true;
+            markRuleSetsDirty(view);
         }
         view.querySelector('#esConnectionSelect').value = clone.ConnectionId;
         currentSchemaId = clone.Id;
@@ -3069,8 +3205,8 @@
         if (!name || !name.trim()) return;
         if (schemaNameExists(schema.ConnectionId, name, schema.Id)) { Dashboard.alert('Schema names must be unique within a Connection.'); return; }
         schema.DisplayName = name.trim();
+        markSchemasDirty(view);
         renderSchemaSelect(view);
-        refreshSchemaDirtyState(view);
     }
 
     function folderTreeUsesAnyRuleSet(node, ruleSetIds) {
@@ -3099,6 +3235,7 @@
         schemas = schemas.filter(function (s) { return s.Id !== schema.Id; });
         ruleSetsFile.RuleSets = ruleSetsFile.RuleSets.filter(function (rs) { return rs.EndpointSchemaId !== schema.Id; });
         currentSchemaId = '';
+        markSchemasDirty(view);
         renderSchemaSelect(view);
         renderSchemaForm(view);
     }
@@ -3174,6 +3311,7 @@
 
             schemas.push(parsed);
             currentSchemaId = parsed.Id;
+            markSchemasDirty(view);
             renderSchemaSelect(view);
             renderSchemaForm(view);
             panel.style.display = 'none';
@@ -3190,10 +3328,12 @@
     var schemasSavedSnapshot = null;
     var schemaRuleSetsSavedSnapshot = null;
     var builtInSchemaOriginals = {};
+    var schemasHaveUnsavedChanges = false;
 
     function snapshotSchemasSaved() {
         schemasSavedSnapshot = JSON.stringify(schemas);
         schemaRuleSetsSavedSnapshot = JSON.stringify(ruleSetsFile);
+        schemasHaveUnsavedChanges = false;
         builtInSchemaOriginals = {};
         schemas.filter(function (schema) { return schema.IsBuiltIn; }).forEach(function (schema) {
             builtInSchemaOriginals[schema.Id] = JSON.stringify(schema);
@@ -3205,9 +3345,14 @@
         var discard = view.querySelector('#esDiscardBtn');
         if (!warn) return;
         var dirty = schemasSavedSnapshot !== null &&
-            (JSON.stringify(schemas) !== schemasSavedSnapshot || schemaOperationChangedRuleSets);
+            (schemasHaveUnsavedChanges || schemaOperationChangedRuleSets);
         warn.innerText = dirty ? 'Unsaved changes' : '';
         if (discard) discard.disabled = !dirty;
+    }
+
+    function markSchemasDirty(view) {
+        schemasHaveUnsavedChanges = true;
+        refreshSchemaDirtyState(view);
     }
 
     function discardEndpointSchemaChanges(view) {
@@ -3224,6 +3369,7 @@
             ruleSetsFile = JSON.parse(schemaRuleSetsSavedSnapshot);
         }
         schemaOperationChangedRuleSets = false;
+        schemasHaveUnsavedChanges = false;
 
         renderSchemaConnectionSelect(view);
         if (connections.some(function (connection) { return connection.Id === selectedConnectionId; })) {
@@ -3301,6 +3447,7 @@
 
     function saveEndpointSchemas(view) {
         var status = view.querySelector('#esSaveStatus');
+        var affectedFolders = 0;
         if (!saveEditedBuiltInsAsCopies()) {
             status.innerText = 'Save cancelled.';
             return;
@@ -3317,7 +3464,8 @@
             data: JSON.stringify({ Payload: { Schemas: schemas } }),
             contentType: 'application/json',
             dataType: 'json'
-        }).then(function () {
+        }).then(function (result) {
+            affectedFolders += (result && result.AffectedFolderCount) || 0;
             if (!schemaOperationChangedRuleSets) return Promise.resolve();
             return ApiClient.ajax({
                 type: 'POST',
@@ -3325,10 +3473,11 @@
                 data: JSON.stringify({ Payload: ruleSetsFile }),
                 contentType: 'application/json',
                 dataType: 'json'
+            }).then(function (result) {
+                affectedFolders += (result && result.AffectedFolderCount) || 0;
             });
         }).then(function () {
-            status.innerText = 'Saved.';
-            setTimeout(function () { if (status.innerText === 'Saved.') status.innerText = ''; }, 3000);
+            status.innerText = affectedFolders > 0 ? 'Saved. Folder tree resync started.' : 'Saved.';
             // Server strips/re-adds built-ins on every save and re-seeds on
             // next load -- re-fetch so any built-in edits we sent are
             // discarded client-side too, keeping the dropdown honest.
@@ -3843,7 +3992,7 @@
                 return;
             }
 
-            statusEl.innerText = 'Saved. Syncing now…';
+            statusEl.innerText = 'Saved. Folder tree resync started.';
             snapshotFolderTreeSaved();
             refreshFolderTreeDirtyState(view);
         }).catch(function () {
@@ -4183,8 +4332,9 @@
             data: JSON.stringify({ Payload: { Connections: connections } }),
             contentType: 'application/json',
             dataType: 'json'
-        }).then(function () {
-            statusEl.innerText = 'Saved. Any folders using a changed connection are being re-synced now.';
+        }).then(function (result) {
+            var affected = (result && result.AffectedFolderCount) || 0;
+            statusEl.innerText = affected > 0 ? 'Saved. Folder tree resync started.' : 'Saved.';
             return Promise.all([
                 ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/Connections'), dataType: 'json' }),
                 ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/EndpointSchemas'), dataType: 'json' }),
@@ -4217,18 +4367,104 @@
                 snapshotConnectionsSaved();
                 refreshConnectionsDirtyState(view);
             });
-        }).then(function () {
-            setTimeout(function () {
-                // 'Re-synced now' is present-tense and stops being true within
-                // seconds — an un-cleared banner would read as still-ongoing
-                // indefinitely, same issue as the earlier stale test-status bug.
-                if (statusEl.innerText === 'Saved. Any folders using a changed connection are being re-synced now.') {
-                    statusEl.innerText = '';
-                }
-            }, 5000);
         }).catch(function () {
             statusEl.innerText = 'Save failed — see server log.';
         });
+    }
+
+    function exportConnections(view) {
+        var panel = view.querySelector('#connImportExportPanel');
+        var text = view.querySelector('#connImportExportText');
+        var status = view.querySelector('#connImportExportStatus');
+        var confirmBtn = view.querySelector('#connImportExportConfirm');
+        var exported = {
+            Connections: connections.map(function (connection) {
+                return {
+                    DisplayLabel: connection.DisplayLabel,
+                    BaseUrl: connection.BaseUrl,
+                    ApiKey: connection.ApiKey,
+                    SystemType: connection.SystemType,
+                    ApiKeyParamName: connection.ApiKeyParamName
+                };
+            })
+        };
+        text.value = JSON.stringify(exported, null, 2);
+        status.innerText = 'This export contains API keys. Store and share it securely.';
+        confirmBtn.innerText = 'Copy to clipboard';
+        confirmBtn.onclick = function () {
+            copyTextToClipboard(text.value).then(function () {
+                status.innerText = 'Copied to clipboard. This text contains API keys.';
+            }).catch(function () {
+                text.select();
+                status.innerText = 'Copy was blocked; the text is selected for manual copying. It contains API keys.';
+            });
+        };
+        panel.style.display = '';
+        text.focus();
+        text.select();
+    }
+
+    function importConnections(view) {
+        var panel = view.querySelector('#connImportExportPanel');
+        var text = view.querySelector('#connImportExportText');
+        var status = view.querySelector('#connImportExportStatus');
+        var confirmBtn = view.querySelector('#connImportExportConfirm');
+        text.value = '';
+        status.innerText = 'Paste exported Connection JSON, then click Import. Imported Connections are added as unsaved copies.';
+        confirmBtn.innerText = 'Import';
+        confirmBtn.onclick = function () {
+            var parsed;
+            try {
+                parsed = JSON.parse(text.value);
+            } catch (e) {
+                status.innerText = 'Not valid JSON.';
+                return;
+            }
+            var imported = Array.isArray(parsed) ? parsed :
+                (parsed && Array.isArray(parsed.Connections) ? parsed.Connections : [parsed]);
+            if (!imported.length || imported.some(function (connection) {
+                return !connection || typeof connection !== 'object' ||
+                    !(connection.DisplayLabel || '').trim() || !(connection.SystemType || '').trim();
+            })) {
+                status.innerText = 'Each imported Connection needs a Connection Name and System.';
+                return;
+            }
+
+            var names = {};
+            connections.forEach(function (connection) {
+                names[(connection.DisplayLabel || '').trim().toLowerCase()] = true;
+            });
+            for (var i = 0; i < imported.length; i++) {
+                var nameKey = imported[i].DisplayLabel.trim().toLowerCase();
+                if (names[nameKey]) {
+                    status.innerText = 'A Connection named "' + imported[i].DisplayLabel +
+                        '" already exists. Rename it in the JSON before importing.';
+                    return;
+                }
+                names[nameKey] = true;
+            }
+
+            imported.forEach(function (connection) {
+                connections.push({
+                    Id: newId(),
+                    DisplayLabel: connection.DisplayLabel.trim(),
+                    BaseUrl: (connection.BaseUrl || '').trim(),
+                    BaseUrlIsUserEntered: true,
+                    ApiKey: connection.ApiKey || '',
+                    SystemType: connection.SystemType.trim(),
+                    ApiKeyParamName: connection.ApiKeyParamName || '',
+                    LastTestSucceeded: null,
+                    LastTestedUtc: null
+                });
+            });
+            panel.style.display = 'none';
+            renderConnectionsTab(view);
+            renderSchemaConnectionSelect(view);
+            renderConnectionAndSchemaSelects(view);
+            refreshConnectionsDirtyState(view);
+        };
+        panel.style.display = '';
+        text.focus();
     }
 
     // ===================================================================
@@ -4352,6 +4588,11 @@
             });
             view.querySelector('#connSaveBtn').addEventListener('click', function () { saveConnections(view); });
             view.querySelector('#connDiscardBtn').addEventListener('click', function () { discardConnectionChanges(view); });
+            view.querySelector('#connExport').addEventListener('click', function () { exportConnections(view); });
+            view.querySelector('#connImport').addEventListener('click', function () { importConnections(view); });
+            view.querySelector('#connImportExportCancel').addEventListener('click', function () {
+                view.querySelector('#connImportExportPanel').style.display = 'none';
+            });
 
             view.querySelector('#esNewSchema').addEventListener('click', function () { newSchema(view); });
             view.querySelector('#esDuplicateSchema').addEventListener('click', function () { duplicateSchema(view); });
@@ -4364,6 +4605,9 @@
             });
             view.querySelector('#esSaveBtn').addEventListener('click', function () { saveEndpointSchemas(view); });
             view.querySelector('#esDiscardBtn').addEventListener('click', function () { discardEndpointSchemaChanges(view); });
+            view.querySelector('#rcsImportExportCancel').addEventListener('click', function () {
+                view.querySelector('#rcsImportExportPanel').style.display = 'none';
+            });
 
             var ruleRawDetails = view.querySelector('#rcsRawResponse');
             ruleRawDetails.addEventListener('toggle', function () {

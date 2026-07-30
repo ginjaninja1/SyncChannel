@@ -294,8 +294,8 @@
 				font: inherit; padding: 0 0.2em; max-width: 20ch;
 				}
 				.esMapExamples {
-				display: none; align-items: center; flex-wrap: wrap; gap: 0.45em; margin: 0.3em 0 0.25em 11.8em;
-				font-size: 0.82em; opacity: 0.85;
+				display:none; align-items:center; justify-content:flex-end; flex-wrap:nowrap; gap:0.45em;
+				margin-left:auto; padding-left:0.6em; font-size:0.82em; opacity:0.85;
 				}
 				.esMapExample { padding: 0.1em 0.35em; border-radius: 4px; background: rgba(255,255,255,0.07); }
 				.esMapExampleImage { height: 1.6em; width: auto; max-width: 5em; object-fit: contain; vertical-align: middle; }
@@ -311,10 +311,18 @@
 				.esPaletteFlow { display:flex; flex-wrap:wrap; align-items:center; gap:0.4em; }
 				.esPaletteFlow > div { display:contents; }
 				#esPaletteChips { display:contents; }
-				.esInlineSettings { display:flex; align-items:flex-end; gap:1em; flex-wrap:wrap; margin-bottom:0.9em; }
-				.esInlineSettings > .esFormRow { margin-bottom:0 !important; flex:0 1 18em; }
+				.esInlineSettings {
+				display:grid; grid-template-columns:minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+				align-items:start; gap:1em; margin-bottom:0.9em;
+				}
+				.esInlineSettings > .esFormRow { margin-bottom:0 !important; min-width:0; }
+				.esInlineSettings select { width:100%; min-width:0; max-width:100%; }
+				@media (max-width: 700px) {
+					.esInlineSettings { grid-template-columns:1fr; }
+				}
 				.esTestResult { margin-top:0.5em; font-size:0.9em; }
 				.connBadge { font-size: 0.8em; opacity: 0.8; min-width: 9em; }
+				.mcsImportExportStatus { font-size:0.85em; opacity:0.6; }
 			</style>
 
 			<div is="emby-tabs" data-index="0" class="tabs-viewmenubar emby-tabs padded-left padded-right focusable scrollX">
@@ -329,7 +337,22 @@
 			<!-- ================= Connections tab ================= -->
 			<div id="tab-connections" class="mcsTab">
 				<div class="fieldDescription" style="margin-bottom: 1em;">
-					Start here. Saved (URL, API key) pairs, reused across any number of fetches. Test doesn't require saving first — it always checks whatever is currently typed in the fields below. The badge next to each saved connection reflects its last known reachability; it's informational only and never blocks anything, since a connection can be configured before its target server is even online.
+					Create and Save as you go: Connection &gt; Schema &gt; Rule Set &gt; Tree Assignment. Assign your preferred interval to the folder tree sync scheduled task
+				</div>
+
+				<div id="connBar" style="display:flex; align-items:center; gap:0.8em; flex-wrap:wrap; margin-bottom:1em;">
+					<span class="rcsIconBtn" id="connAddBtn">+ Add Connection</span>
+					<span class="rcsIconBtn" id="connExport" title="Export all Connections as JSON text">Export</span>
+					<span class="rcsIconBtn" id="connImport" title="Import one or more Connections from JSON text">Import</span>
+				</div>
+
+				<div id="connImportExportPanel" style="display:none; margin-bottom:1em;">
+					<textarea id="connImportExportText" rows="10" style="width:100%; font-family:monospace; font-size:0.85em;"></textarea>
+					<div style="margin-top:0.4em; display:flex; gap:0.5em; align-items:center;">
+						<span class="rcsIconBtn" id="connImportExportConfirm"></span>
+						<span class="rcsIconBtn" id="connImportExportCancel">Close</span>
+						<span id="connImportExportStatus" class="mcsImportExportStatus"></span>
+					</div>
 				</div>
 
 				<div class="connTableScroll">
@@ -346,7 +369,6 @@
 				</div>
 
 				<div style="margin-top: 1em; display:flex; align-items:center; gap:1em;">
-					<button is="emby-button" type="button" id="connAddBtn" class="raised">+ Add Connection</button>
 					<button is="emby-button" type="button" id="connSaveBtn" class="raised button-submit">Save Connections</button>
 					<button is="emby-button" type="button" id="connDiscardBtn" class="raised">Discard</button>
 					<span id="connDirtyWarning" style="color:#e0a030;"></span>
@@ -380,7 +402,7 @@
 					<div style="margin-top:0.4em; display:flex; gap:0.5em; align-items:center;">
 						<span class="rcsIconBtn" id="esImportExportConfirm"></span>
 						<span class="rcsIconBtn" id="esImportExportCancel">Close</span>
-						<span id="esImportExportStatus" class="fieldDescription"></span>
+						<span id="esImportExportStatus" class="mcsImportExportStatus"></span>
 					</div>
 				</div>
 
@@ -396,6 +418,10 @@
 
 			<!-- ================= Rule Sets tab ================= -->
 			<div id="tab-ruleSets" class="mcsTab">
+				<div class="fieldDescription" style="margin-bottom: 1em;">
+					A Rule Set belongs to an Endpoint Schema and filters the endpoint's members. Choose the Connection and Schema first, then select or create its Rule Set.
+				</div>
+
 				<div id="rcsRuleSetBar">
 					<label for="rcsConnectionSelect">Connection:</label>
 					<select id="rcsConnectionSelect"></select>
@@ -407,6 +433,17 @@
 					<span class="rcsIconBtn" id="rcsDuplicateRuleSet" title="Duplicate the currently selected rule set">⧉ Duplicate</span>
 					<span class="rcsIconBtn" id="rcsRenameRuleSet" title="Rename the currently selected rule set">✎ Rename</span>
 					<span class="rcsIconBtn" id="rcsDeleteRuleSet" title="Delete the currently selected rule set">✕ Delete</span>
+					<span class="rcsIconBtn" id="rcsExportRuleSet" title="Copy the selected Rule Set as JSON text">Export</span>
+					<span class="rcsIconBtn" id="rcsImportRuleSet" title="Import a Rule Set into the selected Schema">Import</span>
+				</div>
+
+				<div id="rcsImportExportPanel" style="display:none; margin-bottom:1em;">
+					<textarea id="rcsImportExportText" rows="10" style="width:100%; font-family:monospace; font-size:0.85em;"></textarea>
+					<div style="margin-top:0.4em; display:flex; gap:0.5em; align-items:center;">
+						<span class="rcsIconBtn" id="rcsImportExportConfirm"></span>
+						<span class="rcsIconBtn" id="rcsImportExportCancel">Close</span>
+						<span id="rcsImportExportStatus" class="mcsImportExportStatus"></span>
+					</div>
 				</div>
 
 				<div id="rcsRulesRoot">
