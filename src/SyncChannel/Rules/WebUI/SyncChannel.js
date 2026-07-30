@@ -80,6 +80,9 @@
     var dropTargetRegistry = [];
     var activeDrag = null;
     var highlightedTarget = null;
+    var dragScrollContainer = null;
+    var dragScrollVelocity = 0;
+    var dragScrollFrame = null;
 
     function resetDragEngine() {
         dropTargetRegistry = [];
@@ -122,6 +125,7 @@
         document.body.appendChild(ghost);
 
         activeDrag = { kind: kind, value: value, reorderElement: reorderElement, ghostEl: ghost };
+        dragScrollContainer = findDragScrollContainer(sourceEl);
         positionGhost(e.clientX, e.clientY);
 
         document.addEventListener('pointermove', onPointerMove, true);
@@ -134,6 +138,50 @@
         if (!activeDrag) return;
         activeDrag.ghostEl.style.left = (x + 14) + 'px';
         activeDrag.ghostEl.style.top = (y + 14) + 'px';
+    }
+
+    function findDragScrollContainer(sourceEl) {
+        var el = sourceEl && sourceEl.parentElement;
+        while (el && el !== document.body) {
+            var style = window.getComputedStyle(el);
+            if (/(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight) return el;
+            el = el.parentElement;
+        }
+        return document.scrollingElement || document.documentElement;
+    }
+
+    function updateDragEdgeScroll(clientY) {
+        if (!dragScrollContainer) return;
+        var isDocument = dragScrollContainer === document.scrollingElement ||
+            dragScrollContainer === document.documentElement ||
+            dragScrollContainer === document.body;
+        var rect = isDocument
+            ? { top: 0, bottom: window.innerHeight }
+            : dragScrollContainer.getBoundingClientRect();
+        var edge = Math.min(90, Math.max(50, (rect.bottom - rect.top) * 0.12));
+
+        if (clientY < rect.top + edge) {
+            dragScrollVelocity = -Math.ceil(18 * (rect.top + edge - clientY) / edge);
+        } else if (clientY > rect.bottom - edge) {
+            dragScrollVelocity = Math.ceil(18 * (clientY - (rect.bottom - edge)) / edge);
+        } else {
+            dragScrollVelocity = 0;
+        }
+
+        if (dragScrollVelocity && !dragScrollFrame) {
+            dragScrollFrame = requestAnimationFrame(runDragEdgeScroll);
+        }
+    }
+
+    function runDragEdgeScroll() {
+        dragScrollFrame = null;
+        if (!activeDrag || !dragScrollContainer || !dragScrollVelocity) return;
+        var isDocument = dragScrollContainer === document.scrollingElement ||
+            dragScrollContainer === document.documentElement ||
+            dragScrollContainer === document.body;
+        if (isDocument) window.scrollBy(0, dragScrollVelocity);
+        else dragScrollContainer.scrollTop += dragScrollVelocity;
+        dragScrollFrame = requestAnimationFrame(runDragEdgeScroll);
     }
 
     var insertionIndicatorEl = null;
@@ -206,6 +254,7 @@
     function onPointerMove(e) {
         if (!activeDrag) return;
         positionGhost(e.clientX, e.clientY);
+        updateDragEdgeScroll(e.clientY);
 
         var target = findDropTarget(e.clientX, e.clientY);
 
@@ -257,6 +306,12 @@
             activeDrag.ghostEl.parentNode.removeChild(activeDrag.ghostEl);
         }
         activeDrag = null;
+        dragScrollVelocity = 0;
+        dragScrollContainer = null;
+        if (dragScrollFrame) {
+            cancelAnimationFrame(dragScrollFrame);
+            dragScrollFrame = null;
+        }
         document.removeEventListener('pointermove', onPointerMove, true);
         document.removeEventListener('pointerup', onPointerUp, true);
         document.removeEventListener('pointercancel', onPointerCancel, true);
@@ -283,17 +338,111 @@
     // the folder tree's Add-Fetch dropdown can all read the same lists).
     // ===================================================================
     var connections = [];          // [{ Id, DisplayLabel, BaseUrl, ApiKey, SystemType, ApiKeyParamName, LastTestSucceeded, LastTestedUtc }]
+    var connectionsSavedSnapshot = null;
+    var connectionsSavedFullSnapshot = null;
+    var pendingConnectionRemovals = {};
+    var connectionSchemaOrder = {};
+    var connectionRuleOrder = {};
     var schemas = [];               // [{ Id, DisplayName, ConnectionId, Fields: [{Key/JsonPath, DisplayName, Type}] }]
     var ruleSetsFile = null;        // { RuleSets: [{ Id, Name, EndpointSchemaId, IsBuiltIn, Root }] }
     var currentRuleSetIndex = -1;   // index into ruleSetsFile.RuleSets bound to the canvas
+    var ruleSetsSavedSnapshot = null;
     var activePageView = null;
     var persistedConnectionIds = {};
     var schemaOperationChangedRuleSets = false;
+
+    function editableConnectionsJson(items) {
+        return JSON.stringify((items || []).map(function (connection) {
+            return {
+                Id: connection.Id,
+                DisplayLabel: connection.DisplayLabel,
+                BaseUrl: connection.BaseUrl,
+                BaseUrlIsUserEntered: !!connection.BaseUrlIsUserEntered,
+                ApiKey: connection.ApiKey,
+                SystemType: connection.SystemType,
+                ApiKeyParamName: connection.ApiKeyParamName
+            };
+        }));
+    }
+
+    function snapshotConnectionsSaved() {
+        connectionsSavedSnapshot = editableConnectionsJson(connections);
+        connectionsSavedFullSnapshot = JSON.stringify(connections);
+        pendingConnectionRemovals = {};
+        connectionSchemaOrder = {};
+        schemas.forEach(function (schema, index) { connectionSchemaOrder[schema.Id] = index; });
+        connectionRuleOrder = {};
+        (ruleSetsFile.RuleSets || []).forEach(function (ruleSet, index) { connectionRuleOrder[ruleSet.Id] = index; });
+    }
+
+    function refreshConnectionsDirtyState(view) {
+        var warning = view.querySelector('#connDirtyWarning');
+        var discard = view.querySelector('#connDiscardBtn');
+        if (!warning) return;
+        var dirty = connectionsSavedSnapshot !== null &&
+            editableConnectionsJson(connections) !== connectionsSavedSnapshot;
+        warning.innerText = dirty ? 'Unsaved changes' : '';
+        if (discard) discard.disabled = !dirty;
+    }
+
+    function discardConnectionChanges(view) {
+        if (connectionsSavedFullSnapshot === null) return;
+        var latestTestState = {};
+        connections.forEach(function (connection) {
+            latestTestState[connection.Id] = {
+                LastTestSucceeded: connection.LastTestSucceeded,
+                LastTestedUtc: connection.LastTestedUtc
+            };
+        });
+        connections = JSON.parse(connectionsSavedFullSnapshot);
+        connections.forEach(function (connection) {
+            var test = latestTestState[connection.Id];
+            if (test) {
+                connection.LastTestSucceeded = test.LastTestSucceeded;
+                connection.LastTestedUtc = test.LastTestedUtc;
+            }
+        });
+        Object.keys(pendingConnectionRemovals).forEach(function (connectionId) {
+            var removed = pendingConnectionRemovals[connectionId];
+            (removed.Schemas || []).forEach(function (schema) {
+                if (!schemas.some(function (existing) { return existing.Id === schema.Id; })) schemas.push(schema);
+            });
+            (removed.RuleSets || []).forEach(function (ruleSet) {
+                if (!ruleSetsFile.RuleSets.some(function (existing) { return existing.Id === ruleSet.Id; })) {
+                    ruleSetsFile.RuleSets.push(ruleSet);
+                }
+            });
+        });
+        schemas.sort(function (a, b) {
+            var ai = connectionSchemaOrder.hasOwnProperty(a.Id) ? connectionSchemaOrder[a.Id] : Number.MAX_SAFE_INTEGER;
+            var bi = connectionSchemaOrder.hasOwnProperty(b.Id) ? connectionSchemaOrder[b.Id] : Number.MAX_SAFE_INTEGER;
+            return ai - bi;
+        });
+        ruleSetsFile.RuleSets.sort(function (a, b) {
+            var ai = connectionRuleOrder.hasOwnProperty(a.Id) ? connectionRuleOrder[a.Id] : Number.MAX_SAFE_INTEGER;
+            var bi = connectionRuleOrder.hasOwnProperty(b.Id) ? connectionRuleOrder[b.Id] : Number.MAX_SAFE_INTEGER;
+            return ai - bi;
+        });
+        pendingConnectionRemovals = {};
+        renderConnectionsTab(view);
+        renderSchemaConnectionSelect(view);
+        renderSchemaForm(view);
+        renderConnectionAndSchemaSelects(view);
+        renderRuleSetSelect(view);
+        renderCanvasForCurrentIndex(view);
+        view.querySelector('#connStatus').innerText = '';
+        refreshConnectionsDirtyState(view);
+    }
 
     // ---- Strict ownership helpers ----
     function schemasForConnection(connectionId) {
         if (!connectionId) return [];
         return schemas.filter(function (s) { return s.ConnectionId === connectionId; });
+    }
+
+    function schemaOptionLabel(schema) {
+        return (schema.IsBuiltIn ? '[Built-in] ' : '') +
+            (schema.DisplayName || '(unnamed)') + (schema.IsBuiltIn ? ' 🔒' : '');
     }
 
     function findConnection(connectionId) {
@@ -957,8 +1106,30 @@
     // ===================================================================
     var autoPreviewTimer = null;
     var autoPreviewToken = 0;
+    var ruleRawResponseBySchemaId = {};
+    var ruleRawExpandedBySchemaId = {};
+    var ruleRawStrippedBySchemaId = {};
+
+    function renderRuleRawResponse(view, schemaId) {
+        var details = view.querySelector('#rcsRawResponse');
+        var pre = view.querySelector('#rcsRawResponseText');
+        var strip = view.querySelector('#rcsStripRawResponse');
+        if (!details || !pre || !strip) return;
+        var raw = ruleRawResponseBySchemaId[schemaId];
+        details.style.display = raw ? '' : 'none';
+        if (!raw) return;
+
+        details.open = !!ruleRawExpandedBySchemaId[schemaId];
+        var cleaned = null;
+        if (ruleRawStrippedBySchemaId[schemaId]) {
+            try { cleaned = JSON.stringify(JSON.parse(raw), null, 2); } catch (e) { cleaned = null; }
+        }
+        pre.innerText = cleaned === null ? raw : cleaned;
+        strip.innerText = ruleRawStrippedBySchemaId[schemaId] ? 'Show raw response' : 'Strip to valid JSON';
+    }
 
     function scheduleAutoPreview(view) {
+        refreshRuleSetDirtyState(view);
         if (autoPreviewTimer) clearTimeout(autoPreviewTimer);
         autoPreviewTimer = setTimeout(function () { runAutoPreview(view); }, 450);
     }
@@ -1014,7 +1185,8 @@
 
         var statusEl = view.querySelector('#rcsPreviewStatus');
         var resultEl = view.querySelector('#previewResult');
-        var jsonEl = view.querySelector('#rcsRuleJson');
+        var schemaId = view.querySelector('#rcsSchemaSelect').value;
+        renderRuleRawResponse(view, schemaId);
 
         var invalid = findInvalidConditionElements(rootGroupEl);
         var emptyGroups = findEmptyGroupElements(rootGroupEl);
@@ -1023,12 +1195,10 @@
         if (invalid.length > 0) {
             statusEl.innerText = 'Expression incomplete (' + invalid.length + ' condition(s) missing a field, operator, or value) — preview will resume once it\'s valid.';
             resultEl.innerHTML = '';
-            if (jsonEl) jsonEl.textContent = '';
             return;
         }
 
         var candidate = readGroupFromDom(rootGroupEl);
-        if (jsonEl) jsonEl.textContent = JSON.stringify(candidate, null, 2);
 
         var warningText = '';
         if (emptyGroups.length > 0) {
@@ -1036,7 +1206,6 @@
         }
 
         var connectionId = view.querySelector('#rcsConnectionSelect').value;
-        var schemaId = view.querySelector('#rcsSchemaSelect').value;
         var previewRuleSetId = currentRuleSetIndex >= 0 && ruleSetsFile.RuleSets[currentRuleSetIndex]
             ? ruleSetsFile.RuleSets[currentRuleSetIndex].Id : '';
         var previewToken = ++autoPreviewToken;
@@ -1046,7 +1215,11 @@
         ApiClient.ajax({
             type: 'POST',
             url: ApiClient.getUrl('ChannelSync/RulePreview'),
-            data: JSON.stringify({ EndpointSchemaId: schemaId, Rule: candidate }),
+            data: JSON.stringify({
+                EndpointSchemaId: schemaId,
+                Rule: candidate,
+                IncludeRawJson: !ruleRawResponseBySchemaId[schemaId]
+            }),
             contentType: 'application/json',
             dataType: 'json'
         }).then(function (result) {
@@ -1055,6 +1228,10 @@
                 view.querySelector('#rcsConnectionSelect').value !== connectionId ||
                 view.querySelector('#rcsSchemaSelect').value !== schemaId ||
                 !activeRuleSet || activeRuleSet.Id !== previewRuleSetId) return;
+            if (result.RawJson) {
+                ruleRawResponseBySchemaId[schemaId] = result.RawJson;
+                renderRuleRawResponse(view, schemaId);
+            }
             if (result.Status === 'unavailable' || result.Status === 'error') {
                 statusEl.innerText = result.Message + warningText;
                 resultEl.innerHTML = '';
@@ -1132,6 +1309,9 @@
 
         var connectionId = view.querySelector('#rcsConnectionSelect').value;
         var schemaId = view.querySelector('#rcsSchemaSelect').value;
+        if (forceRefresh) delete ruleRawResponseBySchemaId[schemaId];
+        renderRuleRawResponse(view, schemaId);
+        refreshRuleSetDirtyState(view);
 
         if (currentRuleSetIndex < 0) {
             var hint = document.createElement('div');
@@ -1196,7 +1376,7 @@
         allowed.forEach(function (s) {
             var o = document.createElement('option');
             o.value = s.Id;
-            o.innerText = s.DisplayName;
+            o.innerText = schemaOptionLabel(s);
             if (s.Id === currentVal) o.selected = true;
             schemaSel.appendChild(o);
         });
@@ -1262,6 +1442,42 @@
         }
     }
 
+    function ruleSetsWithCurrentDom(view) {
+        var candidate = JSON.parse(JSON.stringify(ruleSetsFile || { RuleSets: [] }));
+        var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
+        var current = currentRuleSetIndex >= 0 ? candidate.RuleSets[currentRuleSetIndex] : null;
+        if (rootGroupEl && current && !current.IsBuiltIn) current.Root = readGroupFromDom(rootGroupEl);
+        return candidate;
+    }
+
+    function snapshotRuleSetsSaved() {
+        ruleSetsSavedSnapshot = JSON.stringify(ruleSetsFile || { RuleSets: [] });
+    }
+
+    function refreshRuleSetDirtyState(view) {
+        var warning = view.querySelector('#rcsDirtyWarning');
+        var discard = view.querySelector('#rcsDiscardBtn');
+        if (!warning) return;
+        var dirty = ruleSetsSavedSnapshot !== null &&
+            JSON.stringify(ruleSetsWithCurrentDom(view)) !== ruleSetsSavedSnapshot;
+        warning.innerText = dirty ? 'Unsaved changes' : '';
+        if (discard) discard.disabled = !dirty;
+    }
+
+    function discardRuleSetChanges(view) {
+        if (ruleSetsSavedSnapshot === null) return;
+        var selected = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
+        var selectedId = selected ? selected.Id : '';
+        ruleSetsFile = JSON.parse(ruleSetsSavedSnapshot);
+        currentRuleSetIndex = ruleSetsFile.RuleSets.findIndex(function (ruleSet) { return ruleSet.Id === selectedId; });
+        var matching = ruleSetsForCurrentSchema(view);
+        if (currentRuleSetIndex < 0) currentRuleSetIndex = matching.length ? matching[0].idx : -1;
+        renderRuleSetSelect(view);
+        renderCanvasForCurrentIndex(view);
+        view.querySelector('#rcsSaveStatus').innerText = '';
+        refreshRuleSetDirtyState(view);
+    }
+
     function saveRuleSets(view) {
         var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
 
@@ -1301,6 +1517,8 @@
             contentType: 'application/json',
             dataType: 'json'
         }).then(function (result) {
+            snapshotRuleSetsSaved();
+            refreshRuleSetDirtyState(view);
             var affected = (result && result.AffectedFolderCount) || 0;
             if (affected > 0) {
                 statusEl.innerText =
@@ -1384,6 +1602,27 @@
     // Folder tree tab
     // ===================================================================
     var currentTree = null;
+    var folderTreeSavedSnapshot = null;
+
+    function snapshotFolderTreeSaved() {
+        folderTreeSavedSnapshot = JSON.stringify(currentTree);
+    }
+
+    function refreshFolderTreeDirtyState(view) {
+        var warning = view.querySelector('#ftDirtyWarning');
+        var discard = view.querySelector('#ftDiscardBtn');
+        if (!warning) return;
+        var dirty = folderTreeSavedSnapshot !== null && JSON.stringify(currentTree) !== folderTreeSavedSnapshot;
+        warning.innerText = dirty ? 'Unsaved changes' : '';
+        if (discard) discard.disabled = !dirty;
+    }
+
+    function discardFolderTreeChanges(view) {
+        if (folderTreeSavedSnapshot === null) return;
+        currentTree = JSON.parse(folderTreeSavedSnapshot);
+        view.querySelector('#ftStatus').innerText = '';
+        renderTree(view);
+    }
 
     function connectionLabel(id) {
         var c = findConnection(id);
@@ -1535,7 +1774,7 @@
         schemasForConnection(connectionSelect.value).forEach(function (s) {
             var opt = document.createElement('option');
             opt.value = s.Id;
-            opt.innerText = (s.DisplayName || '(unnamed)') + (s.IsBuiltIn ? ' [built-in]' : '');
+            opt.innerText = schemaOptionLabel(s);
             select.appendChild(opt);
         });
 
@@ -1661,16 +1900,6 @@
 
     function renderStaticMappingChips(container, connection) {
         container.innerHTML = '';
-        var hint = document.createElement('div');
-        hint.className = 'fieldDescription';
-        hint.innerText = 'Always-available pieces for building any mapping below (independent of discovered fields):';
-        container.appendChild(hint);
-
-        var row = document.createElement('div');
-        row.style.display = 'flex';
-        row.style.flexWrap = 'wrap';
-        row.style.gap = '0.4em';
-        row.style.marginTop = '0.3em';
 
         STATIC_MAPPING_CHIPS.forEach(function (item) {
             var chip = document.createElement('span');
@@ -1686,10 +1915,8 @@
                 chip.title = 'Value: ' + ((connection && connection.ApiKey) ? '(configured API key — hidden)' : '(not set)');
             }
             makeDraggableSource(chip, item.dragKind, item.segKind);
-            row.appendChild(chip);
+            container.appendChild(chip);
         });
-
-        container.appendChild(row);
     }
 
     function mappingSegmentLabel(seg, fieldsByPath) {
@@ -2105,8 +2332,14 @@
     // click every time -- same cache-first behavior the rule builder's
     // field palette already relies on (lastResponseStore, server-side).
     function buildFieldPalette(view, schema) {
+        var result = document.createDocumentFragment();
+        var rawJsonHolder = document.createElement('div');
+        rawJsonHolder.id = 'esRawJsonHolder';
+        result.appendChild(rawJsonHolder);
+
         var wrap = document.createElement('div');
         wrap.className = 'esBuilderPalette';
+        result.appendChild(wrap);
 
         var paletteTitle = document.createElement('div');
         paletteTitle.className = 'esPaletteTitle';
@@ -2120,24 +2353,18 @@
         // the api-key pieces don't depend on any fetched
         // data, so a mapping can be built entirely from these plus custom
         // text even before an endpoint has ever been tested.
+        var paletteFlow = document.createElement('div');
+        paletteFlow.className = 'esPaletteFlow';
+        wrap.appendChild(paletteFlow);
+
         var staticChipsWrap = document.createElement('div');
         staticChipsWrap.id = 'esStaticPaletteChips';
-        staticChipsWrap.style.marginBottom = '0.6em';
-        wrap.appendChild(staticChipsWrap);
+        paletteFlow.appendChild(staticChipsWrap);
         renderStaticMappingChips(staticChipsWrap, findConnection(schema.ConnectionId));
-
-        var label = document.createElement('div');
-        label.className = 'fieldDescription';
-        label.style.marginBottom = '0.4em';
-        wrap.appendChild(label);
 
         var chipsWrap = document.createElement('div');
         chipsWrap.id = 'esPaletteChips';
-        wrap.appendChild(chipsWrap);
-
-        var rawJsonHolder = document.createElement('div');
-        rawJsonHolder.id = 'esRawJsonHolder';
-        wrap.appendChild(rawJsonHolder);
+        paletteFlow.appendChild(chipsWrap);
 
         function renderRawJson() {
             rawJsonHolder.innerHTML = '';
@@ -2219,16 +2446,12 @@
         renderRawJson();
 
         if (fields && fields.length) {
-            label.innerText = 'Discovered fields (' + fields.length + ') — drag one onto a mapping below.';
             renderSchemaPaletteChips(view, connId, schema.Id, chipsWrap);
-        } else if (schemaDiscoveryBusyBySchemaId[schema.Id]) {
-            label.innerText = 'Testing endpoint and discovering fields…';
-        } else if (lastArrayCandidatesBySchemaId[schema.Id] && lastArrayCandidatesBySchemaId[schema.Id].length) {
-            label.innerText = 'Choose the item array suggested above, then the discovered fields will appear here.';
-        } else if (schema.Path && schema.ConnectionId) {
+        } else if (!schemaDiscoveryBusyBySchemaId[schema.Id] &&
+            !(lastArrayCandidatesBySchemaId[schema.Id] && lastArrayCandidatesBySchemaId[schema.Id].length) &&
+            schema.Path && schema.ConnectionId) {
             var owningConnection = findConnection(schema.ConnectionId);
             if (owningConnection) {
-                label.innerText = 'Loading previously fetched fields…';
                 var requestedSchemaId = schema.Id;
                 ApiClient.ajax({
                     type: 'POST',
@@ -2246,20 +2469,12 @@
                         // mapping legends and dropped chips also depend on
                         // these examples/tooltips.
                         renderSchemaForm(view);
-                    } else {
-                        label.innerText = 'No previously fetched data yet -- run Test and Suggest Field Mappings above.';
                     }
-                }).catch(function () {
-                    label.innerText = 'No previously fetched data yet -- run Test and Suggest Field Mappings above.';
-                });
-            } else {
-                label.innerText = 'Run Test and Suggest Field Mappings above to populate this palette.';
+                }).catch(function () { /* explicit Test status supplies any actionable error */ });
             }
-        } else {
-            label.innerText = 'Run Test and Suggest Field Mappings above to populate this palette.';
         }
 
-        return wrap;
+        return result;
     }
 
     function renderSchemaForm(view) {
@@ -2318,10 +2533,22 @@
 
         container.appendChild(buildFieldPalette(view, schema));
 
-        container.appendChild(esLabeledRow('Object kind', esSelectInput(OBJECT_KINDS, schema.ObjectKind, locked, function (v) {
+        var objectSettings = document.createElement('div');
+        objectSettings.className = 'esInlineSettings';
+        objectSettings.appendChild(esLabeledRow('Object kind', esSelectInput(OBJECT_KINDS, schema.ObjectKind, locked, function (v) {
             schema.ObjectKind = v;
             renderSchemaForm(view); // re-render to show/hide kind-specific fields
         }), 'Which Emby channel shape this schema\'s items become. Fixed choices -- not every combination of container/leaf is meaningful in Emby.'));
+
+        if (schema.ObjectKind === 'FlatMedia' || schema.ObjectKind === 'GenericContainer') {
+            objectSettings.appendChild(esLabeledRow('Leaf media type', esSelectInput(
+                LEAF_MEDIA_TYPES.map(function (t) { return { value: t, label: t }; }),
+                schema.LeafMediaType, locked, function (v) { schema.LeafMediaType = v; })));
+            objectSettings.appendChild(esLabeledRow('Leaf content type', esSelectInput(
+                LEAF_CONTENT_TYPES.map(function (t) { return { value: t, label: t }; }),
+                schema.LeafContentType, locked, function (v) { schema.LeafContentType = v; })));
+        }
+        container.appendChild(objectSettings);
 
         // Schemas have strict Connection ownership, so mapping pieces can
         // resolve connection facts immediately; discovered field examples
@@ -2345,7 +2572,7 @@
             container.appendChild(buildMappingRow(schema.YearField, mapperConnId, schema.Id, 'Year field', null, locked, 'YearField'));
             container.appendChild(buildMappingRow(schema.OverviewField, mapperConnId, schema.Id, 'Overview field', null, locked, 'OverviewField'));
             container.appendChild(buildMappingRow(schema.PosterUrlField, mapperConnId, schema.Id, 'Poster URL field',
-                'If the source already returns a full, ready-to-use URL (e.g. Radarr), a single Field piece is enough. If it only gives an opaque id/tag that needs assembling into a URL (e.g. Emby), build the URL here: {baseUrl} + CustomText + Field + CustomText + {apiKeyName} + CustomText + {apiKeyValue}, using the pieces above.', locked, 'PosterUrlField'));
+                null, locked, 'PosterUrlField'));
         }
 
         // ---- Kind-specific fields ----
@@ -2364,15 +2591,6 @@
         if (schema.ObjectKind === 'PhotoAlbum') {
             container.appendChild(buildMappingRow(schema.MediaFileUrlField, mapperConnId, schema.Id, 'Media file URL field',
                 'The actual image file URL -- distinct from Poster URL, which is a thumbnail. Same build-a-URL-from-pieces approach as Poster URL field above, if the source doesn\'t already return a ready-to-use URL.', locked, null));
-        }
-
-        if (schema.ObjectKind === 'FlatMedia' || schema.ObjectKind === 'GenericContainer') {
-            container.appendChild(esLabeledRow('Leaf media type', esSelectInput(
-                LEAF_MEDIA_TYPES.map(function (t) { return { value: t, label: t }; }),
-                schema.LeafMediaType, locked, function (v) { schema.LeafMediaType = v; })));
-            container.appendChild(esLabeledRow('Leaf content type', esSelectInput(
-                LEAF_CONTENT_TYPES.map(function (t) { return { value: t, label: t }; }),
-                schema.LeafContentType, locked, function (v) { schema.LeafContentType = v; })));
         }
 
         if (schema.ObjectKind === 'GenericContainer') {
@@ -2970,10 +3188,12 @@
     // this doesn't need its own separate change-tracking wired through
     // every input.
     var schemasSavedSnapshot = null;
+    var schemaRuleSetsSavedSnapshot = null;
     var builtInSchemaOriginals = {};
 
     function snapshotSchemasSaved() {
         schemasSavedSnapshot = JSON.stringify(schemas);
+        schemaRuleSetsSavedSnapshot = JSON.stringify(ruleSetsFile);
         builtInSchemaOriginals = {};
         schemas.filter(function (schema) { return schema.IsBuiltIn; }).forEach(function (schema) {
             builtInSchemaOriginals[schema.Id] = JSON.stringify(schema);
@@ -2982,9 +3202,46 @@
 
     function refreshSchemaDirtyState(view) {
         var warn = view.querySelector('#esDirtyWarning');
+        var discard = view.querySelector('#esDiscardBtn');
         if (!warn) return;
-        var dirty = schemasSavedSnapshot !== null && JSON.stringify(schemas) !== schemasSavedSnapshot;
-        warn.innerText = dirty ? 'Unsaved changes -- click Save Endpoint Schemas to persist them.' : '';
+        var dirty = schemasSavedSnapshot !== null &&
+            (JSON.stringify(schemas) !== schemasSavedSnapshot || schemaOperationChangedRuleSets);
+        warn.innerText = dirty ? 'Unsaved changes' : '';
+        if (discard) discard.disabled = !dirty;
+    }
+
+    function discardEndpointSchemaChanges(view) {
+        if (schemasSavedSnapshot === null) return;
+        if (schemaOperationChangedRuleSets &&
+            !confirm('Discard Schema changes and the Rule Set copies/deletions made by those Schema operations?')) return;
+
+        var selectedConnectionId = view.querySelector('#esConnectionSelect').value;
+        var selectedSchemaId = currentSchemaId;
+        var selectedRule = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
+        var selectedRuleId = selectedRule ? selectedRule.Id : '';
+        schemas = JSON.parse(schemasSavedSnapshot);
+        if (schemaOperationChangedRuleSets && schemaRuleSetsSavedSnapshot) {
+            ruleSetsFile = JSON.parse(schemaRuleSetsSavedSnapshot);
+        }
+        schemaOperationChangedRuleSets = false;
+
+        renderSchemaConnectionSelect(view);
+        if (connections.some(function (connection) { return connection.Id === selectedConnectionId; })) {
+            view.querySelector('#esConnectionSelect').value = selectedConnectionId;
+        }
+        currentSchemaId = schemas.some(function (schema) { return schema.Id === selectedSchemaId; })
+            ? selectedSchemaId : '';
+        renderSchemaSelect(view);
+        renderSchemaForm(view);
+        renderConnectionAndSchemaSelects(view);
+        currentRuleSetIndex = ruleSetsFile.RuleSets.findIndex(function (ruleSet) {
+            return ruleSet.Id === selectedRuleId;
+        });
+        renderRuleSetSelect(view);
+        renderCanvasForCurrentIndex(view);
+        view.querySelector('#esSaveStatus').innerText = '';
+        snapshotSchemasSaved();
+        refreshSchemaDirtyState(view);
     }
 
     function copySchemaRuntimeState(source, clone) {
@@ -3102,6 +3359,7 @@
                 renderRuleSetSelect(view);
                 renderCanvasForCurrentIndex(view);
                 snapshotSchemasSaved();
+                if (schemaOperationChangedRuleSets) snapshotRuleSetsSaved();
                 schemaOperationChangedRuleSets = false;
                 refreshSchemaDirtyState(view);
             });
@@ -3191,7 +3449,7 @@
 
         var schemaSelect = makeSelectField(
             'Schema',
-            schemasForConnection(connSelect.value).map(function (s) { return { value: s.Id, text: s.DisplayName }; }),
+            schemasForConnection(connSelect.value).map(function (s) { return { value: s.Id, text: schemaOptionLabel(s) }; }),
             existingSchema ? existingSchema.Id : (schemasForConnection(connSelect.value)[0] && schemasForConnection(connSelect.value)[0].Id));
 
         var ruleSetSelect;
@@ -3241,7 +3499,7 @@
             allowed.forEach(function (s) {
                 var o = document.createElement('option');
                 o.value = s.Id;
-                o.innerText = s.DisplayName;
+                o.innerText = schemaOptionLabel(s);
                 if (s.Id === currentVal) o.selected = true;
                 schemaSelect.appendChild(o);
             });
@@ -3552,6 +3810,7 @@
         var container = view.querySelector('#ftRoot');
         container.innerHTML = '';
         container.appendChild(buildFolderNode(currentTree.RootFolder, null, function () { renderTree(view); }));
+        refreshFolderTreeDirtyState(view);
     }
 
     function saveFolderTree(view) {
@@ -3585,6 +3844,8 @@
             }
 
             statusEl.innerText = 'Saved. Syncing now…';
+            snapshotFolderTreeSaved();
+            refreshFolderTreeDirtyState(view);
         }).catch(function () {
             statusEl.innerText = 'Save failed — see server log.';
         });
@@ -3789,7 +4050,10 @@
             removeBtn.innerText = '✕';
             removeBtn.title = 'Remove connection';
             removeBtn.addEventListener('click', function () {
-                var ownedSchemaIds = schemasForConnection(c.Id).map(function (s) { return s.Id; });
+                var ownedSchemas = schemasForConnection(c.Id);
+                var ownedSchemaIds = ownedSchemas.map(function (s) { return s.Id; });
+                var ownedRuleSets = ruleSetsFile.RuleSets
+                    .filter(function (rs) { return ownedSchemaIds.indexOf(rs.EndpointSchemaId) !== -1; });
                 var ownedRuleIds = ruleSetsFile.RuleSets
                     .filter(function (rs) { return ownedSchemaIds.indexOf(rs.EndpointSchemaId) !== -1; })
                     .map(function (rs) { return rs.Id; });
@@ -3798,6 +4062,10 @@
                     return;
                 }
                 if (!confirm('Remove connection "' + c.DisplayLabel + '" and all of its Schemas and Rule Sets?')) return;
+                pendingConnectionRemovals[c.Id] = {
+                    Schemas: JSON.parse(JSON.stringify(ownedSchemas)),
+                    RuleSets: JSON.parse(JSON.stringify(ownedRuleSets))
+                };
                 schemas = schemas.filter(function (s) { return s.ConnectionId !== c.Id; });
                 ruleSetsFile.RuleSets = ruleSetsFile.RuleSets.filter(function (rs) {
                     return ownedSchemaIds.indexOf(rs.EndpointSchemaId) === -1;
@@ -3805,7 +4073,9 @@
                 connections.splice(idx, 1);
                 renderConnectionsTab(view);
                 renderSchemaConnectionSelect(view);
+                renderSchemaForm(view);
                 renderConnectionAndSchemaSelects(view);
+                refreshConnectionsDirtyState(view);
             });
 
             var testBtn = document.createElement('span');
@@ -3882,7 +4152,10 @@
 
             list.appendChild(row);
             list.appendChild(statusRow);
+            row.addEventListener('input', function () { refreshConnectionsDirtyState(view); });
+            row.addEventListener('change', function () { refreshConnectionsDirtyState(view); });
         });
+        refreshConnectionsDirtyState(view);
     }
 
     function saveConnections(view) {
@@ -3941,6 +4214,8 @@
                 currentRuleSetIndex = selectedRuleIndex >= 0 ? selectedRuleIndex : (matching.length ? matching[0].idx : -1);
                 renderRuleSetSelect(view);
                 renderCanvasForCurrentIndex(view);
+                snapshotConnectionsSaved();
+                refreshConnectionsDirtyState(view);
             });
         }).then(function () {
             setTimeout(function () {
@@ -4013,6 +4288,9 @@
             }
             renderSchemaForm(view);
             snapshotSchemasSaved();
+            snapshotRuleSetsSaved();
+            snapshotFolderTreeSaved();
+            snapshotConnectionsSaved();
 
             renderConnectionAndSchemaSelects(view);
 
@@ -4050,7 +4328,9 @@
             loadAll(view);
 
             view.querySelector('#btnSave').addEventListener('click', function () { saveRuleSets(view); });
+            view.querySelector('#rcsDiscardBtn').addEventListener('click', function () { discardRuleSetChanges(view); });
             view.querySelector('#ftSaveBtn').addEventListener('click', function () { saveFolderTree(view); });
+            view.querySelector('#ftDiscardBtn').addEventListener('click', function () { discardFolderTreeChanges(view); });
 
             view.querySelector('#connAddBtn').addEventListener('click', function () {
                 var defaultApp = KNOWN_APPLICATIONS[0];
@@ -4068,8 +4348,10 @@
                 renderConnectionsTab(view);
                 renderSchemaConnectionSelect(view);
                 renderConnectionAndSchemaSelects(view);
+                refreshConnectionsDirtyState(view);
             });
             view.querySelector('#connSaveBtn').addEventListener('click', function () { saveConnections(view); });
+            view.querySelector('#connDiscardBtn').addEventListener('click', function () { discardConnectionChanges(view); });
 
             view.querySelector('#esNewSchema').addEventListener('click', function () { newSchema(view); });
             view.querySelector('#esDuplicateSchema').addEventListener('click', function () { duplicateSchema(view); });
@@ -4081,14 +4363,27 @@
                 view.querySelector('#esImportExportPanel').style.display = 'none';
             });
             view.querySelector('#esSaveBtn').addEventListener('click', function () { saveEndpointSchemas(view); });
+            view.querySelector('#esDiscardBtn').addEventListener('click', function () { discardEndpointSchemaChanges(view); });
 
-            var jsonToggle = view.querySelector('#rcsToggleJson');
-            var jsonPanel = view.querySelector('#rcsRuleJson');
-            jsonToggle.addEventListener('click', function (e) {
-                e.preventDefault();
-                var showing = jsonPanel.style.display !== 'none';
-                jsonPanel.style.display = showing ? 'none' : 'block';
-                jsonToggle.innerText = showing ? 'Show rule JSON (for debugging)' : 'Hide rule JSON';
+            var ruleRawDetails = view.querySelector('#rcsRawResponse');
+            ruleRawDetails.addEventListener('toggle', function () {
+                var schemaId = view.querySelector('#rcsSchemaSelect').value;
+                if (schemaId) ruleRawExpandedBySchemaId[schemaId] = ruleRawDetails.open;
+            });
+            view.querySelector('#rcsCopyRawResponse').addEventListener('click', function () {
+                var button = view.querySelector('#rcsCopyRawResponse');
+                copyTextToClipboard(view.querySelector('#rcsRawResponseText').innerText).then(function () {
+                    button.innerText = 'Copied!';
+                    setTimeout(function () { button.innerText = 'Copy to clipboard'; }, 1500);
+                }).catch(function () {
+                    button.innerText = 'Copy blocked';
+                });
+            });
+            view.querySelector('#rcsStripRawResponse').addEventListener('click', function () {
+                var schemaId = view.querySelector('#rcsSchemaSelect').value;
+                if (!schemaId) return;
+                ruleRawStrippedBySchemaId[schemaId] = !ruleRawStrippedBySchemaId[schemaId];
+                renderRuleRawResponse(view, schemaId);
             });
         });
     };

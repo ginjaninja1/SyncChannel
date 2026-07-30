@@ -12,6 +12,7 @@
     public class RuleSetStore
     {
         private const string FileName = "rulesets.json";
+        private static readonly object SyncRoot = new object();
 
         // Fixed ids for shipped defaults — never regenerate these, they're
         // how ReplaceBuiltIn recognizes "this same built-in" across loads.
@@ -34,39 +35,45 @@
 
         public RuleSetsFile Load()
         {
-            var path = FilePath;
-            RuleSetsFile file = null;
-
-            if (File.Exists(path))
+            lock (SyncRoot)
             {
-                try
+                var path = FilePath;
+                RuleSetsFile file = null;
+
+                if (File.Exists(path))
                 {
-                    file = json.DeserializeFromString<RuleSetsFile>(File.ReadAllText(path));
+                    try
+                    {
+                        file = json.DeserializeFromString<RuleSetsFile>(File.ReadAllText(path));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.ErrorException("ChannelSync: Failed to read {0} — starting with empty rule sets", ex, path);
+                    }
                 }
-                catch (Exception ex)
+
+                file ??= new RuleSetsFile();
+
+                if (!File.Exists(path))
                 {
-                    logger.ErrorException("ChannelSync: Failed to read {0} — starting with empty rule sets", ex, path);
+                    Save(file);
                 }
+
+                return file;
             }
-
-            file ??= new RuleSetsFile();
-
-            if (!File.Exists(path))
-            {
-                Save(file);
-            }
-
-            return file;
         }
 
         public void Save(RuleSetsFile file)
         {
-            var path = FilePath;
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
+            lock (SyncRoot)
+            {
+                var path = FilePath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
 
-            File.WriteAllText(path, json.SerializeToString(file));
+                File.WriteAllText(path, json.SerializeToString(file));
+            }
         }
 
         public RuleSet Find(string id)
@@ -81,18 +88,21 @@
 
         public RuleSetsFile EnsureBuiltIns(IEnumerable<Configuration.EndpointSchema> schemas)
         {
-            var schemaList = schemas.ToList();
-            var liveSchemaIds = new HashSet<string>(
-                schemaList.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
-            var file = Load();
-            var changed = file.RuleSets.RemoveAll(
-                r => r.IsBuiltIn && !liveSchemaIds.Contains(r.EndpointSchemaId)) > 0;
+            lock (SyncRoot)
+            {
+                var schemaList = schemas.ToList();
+                var liveSchemaIds = new HashSet<string>(
+                    schemaList.Select(s => s.Id), StringComparer.OrdinalIgnoreCase);
+                var file = Load();
+                var changed = file.RuleSets.RemoveAll(
+                    r => r.IsBuiltIn && !liveSchemaIds.Contains(r.EndpointSchemaId)) > 0;
 
-            foreach (var builtIn in BuildBuiltInRuleSets(schemaList))
-                changed |= ReplaceBuiltIn(file, builtIn);
+                foreach (var builtIn in BuildBuiltInRuleSets(schemaList))
+                    changed |= ReplaceBuiltIn(file, builtIn);
 
-            if (changed) Save(file);
-            return file;
+                if (changed) Save(file);
+                return file;
+            }
         }
 
         /// <summary>Every FolderNode.Fetches entry (recursively) whose RuleSetId matches.</summary>

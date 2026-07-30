@@ -11,6 +11,7 @@
     public class EndpointSchemaStore
     {
         private const string FileName = "endpoint-schemas.json";
+        private static readonly object SyncRoot = new object();
 
         public const string RadarrMoviesTemplate = "radarr-movies";
         public const string SonarrSeriesTemplate = "sonarr-series";
@@ -30,39 +31,45 @@
 
         public EndpointSchemasFile Load()
         {
-            var path = FilePath;
-            EndpointSchemasFile file = null;
-
-            if (File.Exists(path))
+            lock (SyncRoot)
             {
-                try
+                var path = FilePath;
+                EndpointSchemasFile file = null;
+
+                if (File.Exists(path))
                 {
-                    file = json.DeserializeFromString<EndpointSchemasFile>(File.ReadAllText(path));
+                    try
+                    {
+                        file = json.DeserializeFromString<EndpointSchemasFile>(File.ReadAllText(path));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.ErrorException("ChannelSync: Failed to read {0} — starting with empty endpoint schemas", ex, path);
+                    }
                 }
-                catch (Exception ex)
+
+                file ??= new EndpointSchemasFile();
+
+                if (!File.Exists(path))
                 {
-                    logger.ErrorException("ChannelSync: Failed to read {0} — starting with empty endpoint schemas", ex, path);
+                    Save(file);
                 }
+
+                return file;
             }
-
-            file ??= new EndpointSchemasFile();
-
-            if (!File.Exists(path))
-            {
-                Save(file);
-            }
-
-            return file;
         }
 
         public void Save(EndpointSchemasFile file)
         {
-            var path = FilePath;
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
+            lock (SyncRoot)
+            {
+                var path = FilePath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
 
-            File.WriteAllText(path, json.SerializeToString(file));
+                File.WriteAllText(path, json.SerializeToString(file));
+            }
         }
 
         public EndpointSchema Find(string id)
@@ -72,33 +79,36 @@
 
         public EndpointSchemasFile EnsureBuiltIns(IEnumerable<ConnectionEntry> connections)
         {
-            var connectionList = connections.ToList();
-            var expectedBuiltInIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var connection in connectionList)
+            lock (SyncRoot)
             {
-                if (string.Equals(connection.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
-                    expectedBuiltInIds.Add(BuiltInId(RadarrMoviesTemplate, connection.Id));
-                else if (string.Equals(connection.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
-                    expectedBuiltInIds.Add(BuiltInId(SonarrSeriesTemplate, connection.Id));
+                var connectionList = connections.ToList();
+                var expectedBuiltInIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var connection in connectionList)
+                {
+                    if (string.Equals(connection.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
+                        expectedBuiltInIds.Add(BuiltInId(RadarrMoviesTemplate, connection.Id));
+                    else if (string.Equals(connection.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
+                        expectedBuiltInIds.Add(BuiltInId(SonarrSeriesTemplate, connection.Id));
+                }
+                var file = Load();
+                var changed = file.Schemas.RemoveAll(
+                    s => s.IsBuiltIn && !expectedBuiltInIds.Contains(s.Id)) > 0;
+
+                foreach (var connection in connectionList)
+                {
+                    EndpointSchema builtIn = null;
+                    if (string.Equals(connection.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
+                        builtIn = BuildRadarrMovies(connection.Id);
+                    else if (string.Equals(connection.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
+                        builtIn = BuildSonarrSeries(connection.Id);
+
+                    if (builtIn != null)
+                        changed |= ReplaceBuiltIn(file, builtIn);
+                }
+
+                if (changed) Save(file);
+                return file;
             }
-            var file = Load();
-            var changed = file.Schemas.RemoveAll(
-                s => s.IsBuiltIn && !expectedBuiltInIds.Contains(s.Id)) > 0;
-
-            foreach (var connection in connectionList)
-            {
-                EndpointSchema builtIn = null;
-                if (string.Equals(connection.SystemType, "radarr", StringComparison.OrdinalIgnoreCase))
-                    builtIn = BuildRadarrMovies(connection.Id);
-                else if (string.Equals(connection.SystemType, "sonarr", StringComparison.OrdinalIgnoreCase))
-                    builtIn = BuildSonarrSeries(connection.Id);
-
-                if (builtIn != null)
-                    changed |= ReplaceBuiltIn(file, builtIn);
-            }
-
-            if (changed) Save(file);
-            return file;
         }
 
         // Always brings the stored built-in in line with the current code
@@ -161,7 +171,7 @@
         private static EndpointSchema BuildRadarrMovies(string connectionId) => new EndpointSchema
         {
             Id = BuiltInId(RadarrMoviesTemplate, connectionId),
-            DisplayName = "Radarr — Movies",
+            DisplayName = "Movies",
             IsBuiltIn = true,
             ConnectionId = connectionId,
             ObjectKind = ChannelObjectKind.FlatMedia,
@@ -215,7 +225,7 @@
         private static EndpointSchema BuildSonarrSeries(string connectionId) => new EndpointSchema
         {
             Id = BuiltInId(SonarrSeriesTemplate, connectionId),
-            DisplayName = "Sonarr — Series",
+            DisplayName = "Series",
             IsBuiltIn = true,
             ConnectionId = connectionId,
             ObjectKind = ChannelObjectKind.Series,

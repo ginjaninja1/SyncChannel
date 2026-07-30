@@ -10,6 +10,7 @@ namespace SyncChannel.Services
 
     public class LastResponseCacheStore
     {
+        private static readonly object SyncRoot = new object();
         private readonly IApplicationPaths appPaths;
         private readonly ILogger logger;
 
@@ -24,11 +25,27 @@ namespace SyncChannel.Services
 
         public string Read(string connectionId, string schemaId)
         {
+            lock (SyncRoot)
+            {
+                return ReadCore(connectionId, schemaId);
+            }
+        }
+
+        private string ReadCore(string connectionId, string schemaId)
+        {
             var path = PathFor(connectionId, schemaId);
             return File.Exists(path) ? File.ReadAllText(path) : "[]";
         }
 
         public void Write(string connectionId, string schemaId, string rawJson)
+        {
+            lock (SyncRoot)
+            {
+                WriteCore(connectionId, schemaId, rawJson);
+            }
+        }
+
+        private void WriteCore(string connectionId, string schemaId, string rawJson)
         {
             try
             {

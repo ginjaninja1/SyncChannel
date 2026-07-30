@@ -35,6 +35,7 @@
     {
         public string EndpointSchemaId { get; set; }
         public RuleNode Rule { get; set; }
+        public bool IncludeRawJson { get; set; }
     }
 
     // ---- Folder tree ----
@@ -656,6 +657,7 @@
                         Message = string.IsNullOrEmpty(schema.ItemsRootPath)
                             ? "Response isn't a JSON array at the root — set 'Items root path' on this schema."
                             : "'" + schema.ItemsRootPath + "' didn't resolve to a JSON array — check 'Items root path' on this schema.",
+                        RawJson = request.IncludeRawJson ? rawJson : null,
                         Fields = new List<string>(),
                         Matches = new List<object>()
                     };
@@ -691,6 +693,7 @@
                 {
                     Status = "ok",
                     MatchCount = matchCount,
+                    RawJson = request.IncludeRawJson ? rawJson : null,
                     Fields = fields,
                     Matches = rows
                 };

@@ -303,12 +303,16 @@
 				.esRawJsonToolbar { display: flex; gap: 0.5em; margin: 0.4em 0; }
 				.esRawJsonPre { max-height: 260px; overflow: auto; white-space: pre-wrap; font-size: 0.85em; }
 				.esBuilderPalette {
-				margin: 1em 0; padding: 0.8em; border-radius: 8px;
+				margin: 0.55em 0 1em; padding: 0.55em; border-radius: 8px;
 				border: 1px solid hsla(var(--theme-primary-color-hue), var(--theme-primary-color-saturation), var(--theme-primary-color-lightness), 0.35);
 				background: hsla(var(--theme-primary-color-hue), var(--theme-primary-color-saturation), var(--theme-primary-color-lightness), 0.05);
 				}
-				.esPaletteTitle { font-weight: 600; margin-bottom: 0.5em; }
-				#esPaletteChips { display:flex; flex-wrap:wrap; gap:0.4em; margin-bottom:0.5em; }
+				.esPaletteTitle { font-weight: 600; margin-bottom: 0.35em; }
+				.esPaletteFlow { display:flex; flex-wrap:wrap; align-items:center; gap:0.4em; }
+				.esPaletteFlow > div { display:contents; }
+				#esPaletteChips { display:contents; }
+				.esInlineSettings { display:flex; align-items:flex-end; gap:1em; flex-wrap:wrap; margin-bottom:0.9em; }
+				.esInlineSettings > .esFormRow { margin-bottom:0 !important; flex:0 1 18em; }
 				.esTestResult { margin-top:0.5em; font-size:0.9em; }
 				.connBadge { font-size: 0.8em; opacity: 0.8; min-width: 9em; }
 			</style>
@@ -344,6 +348,8 @@
 				<div style="margin-top: 1em; display:flex; align-items:center; gap:1em;">
 					<button is="emby-button" type="button" id="connAddBtn" class="raised">+ Add Connection</button>
 					<button is="emby-button" type="button" id="connSaveBtn" class="raised button-submit">Save Connections</button>
+					<button is="emby-button" type="button" id="connDiscardBtn" class="raised">Discard</button>
+					<span id="connDirtyWarning" style="color:#e0a030;"></span>
 					<span id="connStatus"></span>
 				</div>
 
@@ -353,7 +359,7 @@
 			<!-- ================= Endpoint Schemas tab ================= -->
 			<div id="tab-schemas" class="mcsTab">
 				<div class="fieldDescription" style="margin-bottom: 1em;">
-					An Endpoint Schema belongs to one Connection and defines how one HTTP GET endpoint's JSON response maps into a channel item. Choose the Connection first, then select or create its Schema. Radarr/Sonarr connections receive locked built-ins; Duplicate one to make an editable copy.
+					An Endpoint Schema belongs to one Connection and defines how one HTTP GET endpoint's JSON response maps into a channel item. Choose the Connection first, then select or create its Schema.
 				</div>
 
 				<div id="esBar" style="display:flex; align-items:center; gap:0.8em; flex-wrap:wrap; margin-bottom:1em;">
@@ -382,8 +388,9 @@
 
 				<div style="margin-top: 1em; display:flex; gap:0.5em; align-items:center;">
 					<button is="emby-button" type="button" id="esSaveBtn" class="raised button-submit">Save Endpoint Schemas</button>
-					<span id="esSaveStatus"></span>
+					<button is="emby-button" type="button" id="esDiscardBtn" class="raised">Discard</button>
 					<span id="esDirtyWarning" style="color:#e0a030;"></span>
+					<span id="esSaveStatus"></span>
 				</div>
 			</div>
 
@@ -437,16 +444,22 @@
 
 						<div style="margin-top: 1em; display:flex; gap:0.5em; align-items:center;">
 							<button is="emby-button" type="button" id="btnSave" class="raised button-submit">Save Rule Set</button>
+							<button is="emby-button" type="button" id="rcsDiscardBtn" class="raised">Discard</button>
+							<span id="rcsDirtyWarning" style="color:#e0a030;"></span>
 							<span id="rcsSaveStatus"></span>
 						</div>
 
 						<div id="rcsPreviewSection">
 							<div id="rcsPreviewStatus">Preview updates automatically as the rule becomes valid, using a one-time sample fetched the first time you build against this connection — it does not need a folder-tree sync to have run.</div>
 							<div id="previewResult"></div>
-							<div style="margin-top: 0.8em;">
-								<a href="#" id="rcsToggleJson" style="font-size: 0.8em; opacity: 0.6;">Show rule JSON (for debugging)</a>
-							</div>
-							<pre id="rcsRuleJson" style="display:none; margin-top: 0.5em; padding: 0.6em; background: rgba(0,0,0,0.25); border-radius: 6px; font-size: 0.75em; overflow-x: auto; max-height: 300px;"></pre>
+							<details id="rcsRawResponse" style="display:none; margin-top:0.8em;">
+								<summary>Raw response</summary>
+								<div class="esRawJsonToolbar">
+									<span class="rcsIconBtn" id="rcsCopyRawResponse">Copy to clipboard</span>
+									<span class="rcsIconBtn" id="rcsStripRawResponse">Strip to valid JSON</span>
+								</div>
+								<pre id="rcsRawResponseText" class="esRawJsonPre"></pre>
+							</details>
 
 							<div class="fieldDescription" style="margin-top: 1.2em; padding-top: 1em; border-top: 1px solid rgba(255,255,255,0.1);">
 								Each rule set is a saved, named filter, scoped to one endpoint — a rule set built for Radarr's endpoint can't be selected for a Sonarr fetch, and vice versa. Build as many rule sets as you need per endpoint and pick the right one from a fetch's "Rule set" field on the Folder Tree tab. Editing above always edits whichever rule set is selected in the bar; nothing is saved until you click Save.
@@ -469,6 +482,8 @@
 
 				<div id="ftSaveBar">
 					<button is="emby-button" type="button" id="ftSaveBtn" class="raised button-submit">Save Folder Tree</button>
+					<button is="emby-button" type="button" id="ftDiscardBtn" class="raised">Discard</button>
+					<span id="ftDirtyWarning" style="color:#e0a030;"></span>
 					<span id="ftStatus"></span>
 				</div>
 			</div>

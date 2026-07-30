@@ -25,6 +25,7 @@ namespace SyncChannel.Configuration
     public class FieldFavoritesStore
     {
         private const string FileName = "field-favorites.json";
+        private static readonly object SyncRoot = new object();
 
         private readonly IApplicationPaths appPaths;
         private readonly IJsonSerializer json;
@@ -38,6 +39,14 @@ namespace SyncChannel.Configuration
         private string FilePath => Path.Combine(appPaths.DataPath, "channel-sync", FileName);
 
         public FieldFavoritesFile Load()
+        {
+            lock (SyncRoot)
+            {
+                return LoadCore();
+            }
+        }
+
+        private FieldFavoritesFile LoadCore()
         {
             var path = FilePath;
             if (!File.Exists(path)) return new FieldFavoritesFile();
@@ -57,6 +66,14 @@ namespace SyncChannel.Configuration
 
         public void Save(FieldFavoritesFile file)
         {
+            lock (SyncRoot)
+            {
+                SaveCore(file);
+            }
+        }
+
+        private void SaveCore(FieldFavoritesFile file)
+        {
             var path = FilePath;
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -74,6 +91,14 @@ namespace SyncChannel.Configuration
         }
 
         public void SetFavorite(string schemaId, string jsonPath, bool isFavorite)
+        {
+            lock (SyncRoot)
+            {
+                SetFavoriteCore(schemaId, jsonPath, isFavorite);
+            }
+        }
+
+        private void SetFavoriteCore(string schemaId, string jsonPath, bool isFavorite)
         {
             var file = Load();
 

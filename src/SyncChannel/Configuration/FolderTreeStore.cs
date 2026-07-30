@@ -14,6 +14,7 @@ namespace SyncChannel.Configuration
     public class FolderTreeStore
     {
         private const string FileName = "folder-tree.json";
+        private static readonly object SyncRoot = new object();
 
         private readonly IApplicationPaths appPaths;
         private readonly IJsonSerializer json;
@@ -29,6 +30,14 @@ namespace SyncChannel.Configuration
         private string FilePath => Path.Combine(appPaths.DataPath, "channel-sync", FileName);
 
         public FolderTreeFile Load()
+        {
+            lock (SyncRoot)
+            {
+                return LoadCore();
+            }
+        }
+
+        private FolderTreeFile LoadCore()
         {
             var path = FilePath;
 
@@ -68,6 +77,14 @@ namespace SyncChannel.Configuration
         }
 
         public void Save(FolderTreeFile file)
+        {
+            lock (SyncRoot)
+            {
+                SaveCore(file);
+            }
+        }
+
+        private void SaveCore(FolderTreeFile file)
         {
             file.RootFolder.IsRoot = true;
 

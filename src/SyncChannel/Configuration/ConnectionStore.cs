@@ -10,6 +10,7 @@
     public class ConnectionsStore
     {
         private const string FileName = "connections.json";
+        private static readonly object SyncRoot = new object();
 
         private readonly IApplicationPaths appPaths;
         private readonly IJsonSerializer json;
@@ -26,35 +27,41 @@
 
         public ConnectionsFile Load()
         {
-            var path = FilePath;
+            lock (SyncRoot)
+            {
+                var path = FilePath;
 
-            if (!File.Exists(path))
-            {
-                var seeded = new ConnectionsFile();
-                Save(seeded);
-                return seeded;
-            }
+                if (!File.Exists(path))
+                {
+                    var seeded = new ConnectionsFile();
+                    Save(seeded);
+                    return seeded;
+                }
 
-            try
-            {
-                var file = json.DeserializeFromString<ConnectionsFile>(File.ReadAllText(path));
-                return file ?? new ConnectionsFile();
-            }
-            catch (Exception ex)
-            {
-                logger.ErrorException("ChannelSync: Failed to read {0} — starting with an empty connections file", ex, path);
-                return new ConnectionsFile();
+                try
+                {
+                    var file = json.DeserializeFromString<ConnectionsFile>(File.ReadAllText(path));
+                    return file ?? new ConnectionsFile();
+                }
+                catch (Exception ex)
+                {
+                    logger.ErrorException("ChannelSync: Failed to read {0} — starting with an empty connections file", ex, path);
+                    return new ConnectionsFile();
+                }
             }
         }
 
         public void Save(ConnectionsFile file)
         {
-            var path = FilePath;
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
+            lock (SyncRoot)
+            {
+                var path = FilePath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
 
-            File.WriteAllText(path, json.SerializeToString(file));
+                File.WriteAllText(path, json.SerializeToString(file));
+            }
         }
 
         public ConnectionEntry Find(string id)
