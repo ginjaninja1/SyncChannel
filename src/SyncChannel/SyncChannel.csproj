@@ -4,7 +4,7 @@
 		<AssemblyName>Emby.SyncChannel</AssemblyName>
 		<RootNamespace>SyncChannel</RootNamespace>
 		<LangVersion>latest</LangVersion>
-		<Version>0.0.0.6</Version>
+		<Version>0.0.0.8</Version>
 	</PropertyGroup>
 	<ItemGroup>
 		<Compile Remove="Channels\RadarrComingSoonChannel.cs" />
@@ -24,6 +24,7 @@
 	<ItemGroup>
 		<None Remove="ComingSoonChannel.png" />
 		<None Remove="ComingSoonChannel2.png" />
+		<None Remove="Rules\WebUI\dragEngine.js" />
 		<None Remove="Rules\WebUI\folderTreePage.html" />
 		<None Remove="Rules\WebUI\folderTreePage.js" />
 		<None Remove="Rules\WebUI\rulesPage.html" />
@@ -38,6 +39,7 @@
   -->
 	<ItemGroup>
 		<EmbeddedResource Include="ComingSoonChannel2.png" />
+		<EmbeddedResource Include="Rules\WebUI\dragEngine.js" />
 		<EmbeddedResource Include="thumb.png" Condition="Exists('thumb.png')" />
 		<EmbeddedResource Include="comingsoon.mp4" Condition="Exists('comingsoon.mp4')" />
 		<EmbeddedResource Include="Rules\WebUI\SyncChannel.html" />

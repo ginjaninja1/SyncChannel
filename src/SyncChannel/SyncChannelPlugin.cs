@@ -61,6 +61,11 @@ namespace SyncChannel
                 {
                     Name = "SyncChannelPageJs",
                     EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.SyncChannel.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelDragEngineJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.dragEngine.js"
                 }
             };
         }

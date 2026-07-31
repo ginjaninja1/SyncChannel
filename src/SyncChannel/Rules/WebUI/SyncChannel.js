@@ -1,4 +1,5 @@
-﻿define(['jQuery'], function ($) {
+﻿define(['jQuery', 'configurationpage?name=SyncChannelDragEngineJs'], function ($, dragEngine) {
+    dragEngine.sayHello();
     'use strict';
 
     // ===================================================================
