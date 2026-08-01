@@ -4,7 +4,7 @@
 		<AssemblyName>Emby.SyncChannel</AssemblyName>
 		<RootNamespace>SyncChannel</RootNamespace>
 		<LangVersion>latest</LangVersion>
-		<Version>0.0.0.8</Version>
+		<Version>0.0.0.9</Version>
 	</PropertyGroup>
 	<ItemGroup>
 		<Compile Remove="Channels\RadarrComingSoonChannel.cs" />
@@ -25,6 +25,15 @@
 		<None Remove="ComingSoonChannel.png" />
 		<None Remove="ComingSoonChannel2.png" />
 		<None Remove="Rules\WebUI\dragEngine.js" />
+		<None Remove="Rules\WebUI\store.js" />
+		<None Remove="Rules\WebUI\dirtyTracker.js" />
+		<None Remove="Rules\WebUI\fieldDiscovery.js" />
+		<None Remove="Rules\WebUI\sharedHelpers.js" />
+		<None Remove="Rules\WebUI\connectionsTab.js" />
+		<None Remove="Rules\WebUI\ruleBuilderTab.js" />
+		<None Remove="Rules\WebUI\ruleSetManagerTab.js" />
+		<None Remove="Rules\WebUI\schemaEditorTab.js" />
+		<None Remove="Rules\WebUI\folderTreeTab.js" />
 		<None Remove="Rules\WebUI\folderTreePage.html" />
 		<None Remove="Rules\WebUI\folderTreePage.js" />
 		<None Remove="Rules\WebUI\rulesPage.html" />
@@ -40,6 +49,15 @@
 	<ItemGroup>
 		<EmbeddedResource Include="ComingSoonChannel2.png" />
 		<EmbeddedResource Include="Rules\WebUI\dragEngine.js" />
+		<EmbeddedResource Include="Rules\WebUI\store.js" />
+		<EmbeddedResource Include="Rules\WebUI\dirtyTracker.js" />
+		<EmbeddedResource Include="Rules\WebUI\fieldDiscovery.js" />
+		<EmbeddedResource Include="Rules\WebUI\sharedHelpers.js" />
+		<EmbeddedResource Include="Rules\WebUI\connectionsTab.js" />
+		<EmbeddedResource Include="Rules\WebUI\ruleBuilderTab.js" />
+		<EmbeddedResource Include="Rules\WebUI\ruleSetManagerTab.js" />
+		<EmbeddedResource Include="Rules\WebUI\schemaEditorTab.js" />
+		<EmbeddedResource Include="Rules\WebUI\folderTreeTab.js" />
 		<EmbeddedResource Include="thumb.png" Condition="Exists('thumb.png')" />
 		<EmbeddedResource Include="comingsoon.mp4" Condition="Exists('comingsoon.mp4')" />
 		<EmbeddedResource Include="Rules\WebUI\SyncChannel.html" />

@@ -66,6 +66,51 @@ namespace SyncChannel
                 {
                     Name = "SyncChannelDragEngineJs",
                     EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.dragEngine.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelStoreJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.store.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelDirtyTrackerJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.dirtyTracker.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelFieldDiscoveryJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.fieldDiscovery.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelSharedHelpersJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.sharedHelpers.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelConnectionsTabJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.connectionsTab.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelRuleBuilderTabJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.ruleBuilderTab.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelRuleSetManagerTabJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.ruleSetManagerTab.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelSchemaEditorTabJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.schemaEditorTab.js"
+                },
+                new PluginPageInfo
+                {
+                    Name = "SyncChannelFolderTreeTabJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.folderTreeTab.js"
                 }
             };
         }
