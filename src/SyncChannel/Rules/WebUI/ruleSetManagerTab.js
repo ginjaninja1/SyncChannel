@@ -235,34 +235,42 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function saveRuleSets(view) {
+            var currentRuleSetIndex = store.get('currentRuleSetIndex');
             var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
 
-            if (!rootGroupEl) {
+            // currentRuleSetIndex < 0 is a legitimate state after deleting the
+            // last rule set for this schema — there's nothing to validate or
+            // capture from the canvas, just a pending deletion already sitting
+            // in ruleSetsFile that still needs to reach the server. Only bail
+            // out here when a rule set IS supposed to be selected but its DOM
+            // is unexpectedly missing.
+            if (currentRuleSetIndex >= 0 && !rootGroupEl) {
                 Dashboard.alert('No rule set is selected to save. Create one with "+ New" first.');
                 return;
             }
 
-            var invalidNodes = ruleBuilderTab.findInvalidConditionElements(rootGroupEl);
-            ruleBuilderTab.highlightInvalid(rootGroupEl, invalidNodes);
+            if (currentRuleSetIndex >= 0 && rootGroupEl) {
+                var invalidNodes = ruleBuilderTab.findInvalidConditionElements(rootGroupEl);
+                ruleBuilderTab.highlightInvalid(rootGroupEl, invalidNodes);
 
-            if (invalidNodes.length > 0) {
-                Dashboard.alert('Some conditions are incomplete (missing field, operator, or value) — they\'re outlined in red. Fill them in before saving.');
-                invalidNodes[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-                return;
-            }
+                if (invalidNodes.length > 0) {
+                    Dashboard.alert('Some conditions are incomplete (missing field, operator, or value) — they\'re outlined in red. Fill them in before saving.');
+                    invalidNodes[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return;
+                }
 
-            var emptyGroups = ruleBuilderTab.findEmptyGroupElements(rootGroupEl);
-            ruleBuilderTab.highlightEmptyGroups(rootGroupEl, emptyGroups);
-            if (emptyGroups.length > 0) {
-                var proceed = confirm(
-                    emptyGroups.length + ' group(s) are empty (outlined in amber). An empty AND-group matches EVERY item by default — ' +
-                    'this rule may be wider than intended. Save anyway?'
-                );
-                if (!proceed) return;
+                var emptyGroups = ruleBuilderTab.findEmptyGroupElements(rootGroupEl);
+                ruleBuilderTab.highlightEmptyGroups(rootGroupEl, emptyGroups);
+                if (emptyGroups.length > 0) {
+                    var proceed = confirm(
+                        emptyGroups.length + ' group(s) are empty (outlined in amber). An empty AND-group matches EVERY item by default — ' +
+                        'this rule may be wider than intended. Save anyway?'
+                    );
+                    if (!proceed) return;
+                }
             }
 
             var ruleSetsFile = store.get('ruleSetsFile');
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
             var current = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
             if (current && current.IsBuiltIn) {
                 var copyName = prompt(
@@ -483,6 +491,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderConnectionAndSchemaSelects(view);
             renderRuleSetSelect(view);
             renderCanvasForCurrentIndex(view);
+            snapshotRuleSetsSaved();
             refreshRuleSetDirtyState(view);
 
             store.on('connectionsChanged', function () { renderConnectionAndSchemaSelects(view); });

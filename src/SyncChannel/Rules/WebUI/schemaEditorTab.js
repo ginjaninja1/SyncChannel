@@ -228,10 +228,71 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 } else if (item.segKind === 'ApiKeyValue') {
                     chip.title = 'Value: ' + ((connection && connection.ApiKey) ? '(configured API key — hidden)' : '(not set)');
                 }
+                chip.dataset.dragLabel = item.label;
                 dragEngine.makeDraggableSource(chip, item.dragKind, item.segKind);
                 container.appendChild(chip);
             });
         }
+
+        // Compact text notation <-> Modifier object. Mirrors
+        // HttpFetchProvider's C# application logic exactly (Left/Right take
+        // a character count, Substring/ArraySlice take inclusive start:end,
+        // ArraySlice end -1 means "all") — kept in one place so the preview
+        // shown here never drifts from what actually gets resolved server-side.
+        function formatModifier(modifier) {
+            if (!modifier || modifier.Kind === 'None') return '';
+            switch (modifier.Kind) {
+                case 'Left': return 'Left[' + modifier.Start + ']';
+                case 'Right': return 'Right[' + modifier.Start + ']';
+                case 'Substring': return 'Substring[' + modifier.Start + ':' + modifier.End + ']';
+                case 'ArraySlice':
+                    if (modifier.End < 0) return '[all]';
+                    return modifier.Start === modifier.End ? '[' + modifier.Start + ']' : '[' + modifier.Start + ':' + modifier.End + ']';
+                default: return '';
+            }
+        }
+
+        function parseModifierText(text) {
+            var t = (text || '').trim();
+            if (!t) return { Kind: 'None', Start: 0, End: -1 };
+
+            var m;
+            if ((m = /^left\[(\d+)\]$/i.exec(t))) return { Kind: 'Left', Start: parseInt(m[1], 10), End: -1 };
+            if ((m = /^right\[(\d+)\]$/i.exec(t))) return { Kind: 'Right', Start: parseInt(m[1], 10), End: -1 };
+            if ((m = /^substring\[(\d+):(\d+)\]$/i.exec(t))) return { Kind: 'Substring', Start: parseInt(m[1], 10), End: parseInt(m[2], 10) };
+            if (/^\[all\]$/i.test(t)) return { Kind: 'ArraySlice', Start: 0, End: -1 };
+            if ((m = /^\[(\d+):(\d+)\]$/.exec(t))) return { Kind: 'ArraySlice', Start: parseInt(m[1], 10), End: parseInt(m[2], 10) };
+            if ((m = /^\[(\d+)\]$/.exec(t))) return { Kind: 'ArraySlice', Start: parseInt(m[1], 10), End: parseInt(m[1], 10) };
+
+            return null; // unparseable — caller keeps previous value, flags invalid
+        }
+
+        // Client-side mirror of HttpFetchProvider's ApplyStringModifier /
+        // ApplyArraySlice, used only for the hover-preview examples — the
+        // server is always the source of truth for the actual resolved value.
+        function applyModifierToValues(values, modifier) {
+            if (!modifier || modifier.Kind === 'None') return values;
+            if (modifier.Kind === 'ArraySlice') {
+                if (modifier.End < 0) return [values.join(', ')];
+                var start = Math.max(0, Math.min(modifier.Start, values.length - 1));
+                var end = Math.max(start, Math.min(modifier.End, values.length - 1));
+                return [values.slice(start, end + 1).join(', ')];
+            }
+            return values.map(function (v) {
+                if (modifier.Kind === 'Left') return String(v).slice(0, Math.max(0, modifier.Start));
+                if (modifier.Kind === 'Right') {
+                    var n = Math.max(0, Math.min(modifier.Start, v.length));
+                    return String(v).slice(v.length - n);
+                }
+                if (modifier.Kind === 'Substring') {
+                    var s = Math.max(0, Math.min(modifier.Start, v.length));
+                    var e = Math.max(s, Math.min(modifier.End, v.length - 1));
+                    return String(v).slice(s, e + 1);
+                }
+                return v;
+            });
+        }
+
 
         function mappingSegmentLabel(seg, fieldsByPath) {
             switch (seg.Kind) {
@@ -377,7 +438,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                             var examples = field && field.Examples ? field.Examples : [];
                             if (!examples.length) return '';
                             hasFieldValue = true;
-                            return String(examples[Math.min(exampleIndex, examples.length - 1)]);
+                            if (seg.Modifier && seg.Modifier.Kind === 'ArraySlice') {
+                                return applyModifierToValues(examples, seg.Modifier)[0] || '';
+                            }
+                            var raw = String(examples[Math.min(exampleIndex, examples.length - 1)]);
+                            return applyModifierToValues([raw], seg.Modifier)[0] || '';
                         }
                         if (seg.Kind === 'CustomText') return seg.Value || '';
                         if (seg.Kind === 'BaseUrl') return (connection && connection.BaseUrl) || '';
@@ -440,6 +505,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 mapping.Segments.forEach(function (seg, idx) {
                     var chip = document.createElement('span');
                     chip.className = 'rcsChip esMapSeg esMapSeg-' + seg.Kind.toLowerCase();
+                    // (modChip appended after the field-value chip below, once the value chip finishes building)
 
                     if (!locked) {
                         var dragHandle = document.createElement('span');
@@ -504,6 +570,54 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     }
 
                     valueEl.appendChild(chip);
+
+                    if (seg.Kind === 'Field' && !locked) {
+                        var field = fbp[seg.Value];
+                        var modChip = document.createElement('span');
+                        modChip.className = 'rcsChip esMapSeg rcsChip-modifier';
+                        modChip.title = 'String/array function on this field — e.g. Left[4], Right[2], Substring[0:3], [0:0], [1:2], [all]. Blank clears it.';
+
+                        var modInput = document.createElement('input');
+                        modInput.type = 'text';
+                        modInput.className = 'esMapModifierInput';
+                        modInput.placeholder = field && field.Type === 'List' ? '[0:0]' : 'fn';
+                        modInput.value = formatModifier(seg.Modifier);
+
+                        function refreshModHover() {
+                            if (!field || !field.Examples || !field.Examples.length || !seg.Modifier) {
+                                modChip.title = 'String/array function on this field — e.g. Left[4], Right[2], Substring[0:3], [0:0], [1:2], [all].';
+                                return;
+                            }
+                            var applied = applyModifierToValues(field.Examples, seg.Modifier);
+                            modChip.title = applied.slice(0, 3).join('\n') || 'No examples available.';
+                        }
+                        refreshModHover();
+
+                        modInput.addEventListener('input', function (e) {
+                            var parsed = parseModifierText(e.target.value);
+                            if (parsed === null) {
+                                modInput.classList.add('esMapModifierInvalid');
+                                return;
+                            }
+                            modInput.classList.remove('esMapModifierInvalid');
+                            seg.Modifier = parsed.Kind === 'None' ? null : parsed;
+                            refreshModHover();
+                            refreshExamples();
+                            markSchemasDirty(activeView);
+                        });
+                        modInput.addEventListener('blur', function () {
+                            // Revert visibly-invalid leftover text back to whatever
+                            // last actually applied, rather than leaving a red,
+                            // unparsed string sitting in the field.
+                            if (modInput.classList.contains('esMapModifierInvalid')) {
+                                modInput.value = formatModifier(seg.Modifier);
+                                modInput.classList.remove('esMapModifierInvalid');
+                            }
+                        });
+
+                        modChip.appendChild(modInput);
+                        valueEl.appendChild(modChip);
+                    }
                 });
 
                 valueEl.appendChild(examplesEl);
@@ -530,6 +644,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     var seg = (parsed && parsed.path)
                         ? { Kind: 'Field', Value: parsed.path }
                         : { Kind: rawValue, Value: '' };
+
+                    if (seg.Kind === 'Field' && parsed && parsed.type === 'List') {
+                        seg.Modifier = { Kind: 'ArraySlice', Start: 0, End: 0 };
+                    }
 
                     var insertAt = findMappingInsertionIndex(valueEl, clientX, null, clientYIgnored);
                     mapping.Segments.splice(insertAt, 0, seg);
@@ -558,7 +676,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     } else {
                         mapping.Segments.splice(toIdx, 0, {
                             Kind: payload.Segment.Kind,
-                            Value: payload.Segment.Value || ''
+                            Value: payload.Segment.Value || '',
+                            Modifier: payload.Segment.Modifier || null
                         });
                     }
                     renderSegments();
@@ -570,7 +689,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     try { payload = JSON.parse(value); } catch (e) { return; }
                     if (!payload || !Array.isArray(payload.Segments) || payload.SourceId === mappingDragId) return;
                     var copiedSegments = payload.Segments.map(function (seg) {
-                        return { Kind: seg.Kind, Value: seg.Value || '' };
+                        return { Kind: seg.Kind, Value: seg.Value || '', Modifier: seg.Modifier || null };
                     });
                     var insertAt = findMappingInsertionIndex(valueEl, clientX, null, clientY);
                     Array.prototype.splice.apply(mapping.Segments, [insertAt, 0].concat(copiedSegments));
@@ -583,7 +702,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     try { payload = JSON.parse(value); } catch (e) { return; }
                     if (!payload || !Array.isArray(payload.Segments) || payload.SourceId === mappingDragId) return;
                     mapping.Segments = payload.Segments.map(function (seg) {
-                        return { Kind: seg.Kind, Value: seg.Value || '' };
+                        return { Kind: seg.Kind, Value: seg.Value || '', Modifier: seg.Modifier || null };
                     });
                     renderSegments();
                     markSchemasDirty(activeView);
@@ -882,6 +1001,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         function buildProviderIdFieldsEditor(view, schema, mapperConnId, locked) {
             if (!schema.ProviderIdFields) schema.ProviderIdFields = {};
+            if (!schema.BadgeEnabledProviderIdKeys) schema.BadgeEnabledProviderIdKeys = [];
+            if (!schema.ProviderIdBadgeUrlFormats) schema.ProviderIdBadgeUrlFormats = {};
 
             var wrap = document.createElement('div');
             wrap.style.marginBottom = '0.9em';
@@ -892,6 +1013,28 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             label.style.marginBottom = '0.3em';
             wrap.appendChild(label);
 
+            // Only keys this plugin has zero-guessing certainty about: its
+            // own compiled IExternalId classes. Deliberately NOT reserving
+            // Tmdb/Imdb/Tvdb/etc — that would require knowing Emby's full
+            // native IExternalId roster, which isn't confirmed. An admin
+            // naming a custom field "Tmdb" and enabling our badge for it
+            // just produces a harmless duplicate badge alongside Emby's own —
+            // an acceptable, fail-safe edge case rather than a guess dressed
+            // up as a rule.
+            var RESERVED_BADGE_KEYS = ['radarrid', 'sonarrid'];
+            var BADGE_SLOT_COUNT = 5;
+
+            function allEnabledBadgeKeysAcrossSchemas(excludeSchemaId, excludeKey) {
+                var keys = [];
+                store.get('schemas').forEach(function (s) {
+                    (s.BadgeEnabledProviderIdKeys || []).forEach(function (k) {
+                        if (s.Id === excludeSchemaId && k === excludeKey) return;
+                        keys.push(k.toLowerCase());
+                    });
+                });
+                return keys;
+            }
+
             Object.keys(schema.ProviderIdFields).forEach(function (key) {
                 var mapping = schema.ProviderIdFields[key];
                 if (!mapping || !mapping.Segments) {
@@ -899,8 +1042,18 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     schema.ProviderIdFields[key] = mapping;
                 }
 
-                var keyRow = document.createElement('div');
-                keyRow.className = 'esProviderIdKeyRow';
+                var providerBlock = document.createElement('div');
+                providerBlock.className = 'esProviderIdBlock';
+
+                // ---- Row 1: Name (+ badge toggle + remove) — controls that
+                // belong to the PROVIDER as a whole, not to its value. ----
+                var nameRow = document.createElement('div');
+                nameRow.className = 'esProviderIdKeyRow';
+
+                var nameLabel = document.createElement('span');
+                nameLabel.className = 'esProviderIdRowLabel';
+                nameLabel.innerText = 'Name';
+                nameRow.appendChild(nameLabel);
 
                 var keyInput = document.createElement('input');
                 keyInput.type = 'text';
@@ -908,16 +1061,50 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 keyInput.value = key;
                 keyInput.placeholder = 'e.g. Tmdb';
                 keyInput.disabled = !!locked;
-                keyInput.title = 'Recognised with a matching Emby badge: Tmdb, Imdb, Tvdb. Any other name still works internally as a stored provider id, just without a matching built-in badge.';
+                keyInput.title = 'Stored under this name in ProviderIds. Some names (Tmdb, Imdb) are already recognised with a built-in Emby badge; any other name still works internally, it just needs the Badge toggle here to also show one.';
                 keyInput.addEventListener('change', function (e) {
                     var newKey = e.target.value;
                     if (!newKey || newKey === key || schema.ProviderIdFields.hasOwnProperty(newKey)) { e.target.value = key; return; }
                     schema.ProviderIdFields[newKey] = schema.ProviderIdFields[key];
                     delete schema.ProviderIdFields[key];
+                    var badgeIdx = schema.BadgeEnabledProviderIdKeys.indexOf(key);
+                    if (badgeIdx >= 0) schema.BadgeEnabledProviderIdKeys[badgeIdx] = newKey;
+                    if (schema.ProviderIdBadgeUrlFormats.hasOwnProperty(key)) {
+                        schema.ProviderIdBadgeUrlFormats[newKey] = schema.ProviderIdBadgeUrlFormats[key];
+                        delete schema.ProviderIdBadgeUrlFormats[key];
+                    }
+                    markSchemasDirty(view);
+                    renderSchemaForm(view);
+                    focusProviderIdValueInputAfterRename(view, newKey);
+                });
+                nameRow.appendChild(keyInput);
+
+                var isReserved = RESERVED_BADGE_KEYS.indexOf(key.toLowerCase()) >= 0;
+                var badgeLabel = document.createElement('label');
+                badgeLabel.className = 'esBadgeToggleLabel';
+                var badgeToggle = document.createElement('input');
+                badgeToggle.type = 'checkbox';
+                badgeToggle.disabled = !!locked || isReserved;
+                badgeToggle.checked = schema.BadgeEnabledProviderIdKeys.indexOf(key) >= 0;
+                var atCapacity = allEnabledBadgeKeysAcrossSchemas(schema.Id, key).length >= BADGE_SLOT_COUNT;
+                if (isReserved) {
+                    badgeLabel.title = 'Already has a built-in badge (RadarrId/SonarrId) — no toggle needed.';
+                } else if (!badgeToggle.checked && atCapacity) {
+                    badgeToggle.disabled = true;
+                    badgeLabel.title = 'All 5 provider-id badge slots are in use. Turn one off elsewhere, or ask for the slot pool to be increased (requires a rebuild + restart).';
+                } else {
+                    badgeLabel.title = 'Show this as a clickable provider-id badge under Edit Metadata in the Emby client.';
+                }
+                badgeToggle.addEventListener('change', function (e) {
+                    var idx = schema.BadgeEnabledProviderIdKeys.indexOf(key);
+                    if (e.target.checked && idx < 0) schema.BadgeEnabledProviderIdKeys.push(key);
+                    if (!e.target.checked && idx >= 0) schema.BadgeEnabledProviderIdKeys.splice(idx, 1);
                     markSchemasDirty(view);
                     renderSchemaForm(view);
                 });
-                keyRow.appendChild(keyInput);
+                badgeLabel.appendChild(badgeToggle);
+                badgeLabel.appendChild(document.createTextNode(' Badge'));
+                nameRow.appendChild(badgeLabel);
 
                 if (!locked) {
                     var removeBtn = document.createElement('span');
@@ -925,14 +1112,58 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     removeBtn.innerText = 'Remove';
                     removeBtn.addEventListener('click', function () {
                         delete schema.ProviderIdFields[key];
+                        var badgeIdx = schema.BadgeEnabledProviderIdKeys.indexOf(key);
+                        if (badgeIdx >= 0) schema.BadgeEnabledProviderIdKeys.splice(badgeIdx, 1);
+                        delete schema.ProviderIdBadgeUrlFormats[key];
                         markSchemasDirty(view);
                         renderSchemaForm(view);
                     });
-                    keyRow.appendChild(removeBtn);
+                    nameRow.appendChild(removeBtn);
                 }
 
-                wrap.appendChild(keyRow);
-                wrap.appendChild(buildMappingRow(mapping, mapperConnId, schema.Id, '\u2192 value', null, locked, null));
+                providerBlock.appendChild(nameRow);
+
+                // ---- Row 2: Value — the field builder itself. "Clear"
+                // lives inside buildMappingRow already, scoped correctly to
+                // just this row's segments, not the provider as a whole. ----
+                providerBlock.appendChild(buildMappingRow(mapping, mapperConnId, schema.Id, 'Value', null, locked, null));
+
+                // ---- Row 3: URL format — only meaningful, and only
+                // enabled, once the badge is on. ----
+                var urlRow = document.createElement('div');
+                urlRow.className = 'esProviderIdUrlRow';
+
+                var urlLabel = document.createElement('span');
+                urlLabel.className = 'esProviderIdRowLabel';
+                urlLabel.innerText = 'URL format';
+                urlRow.appendChild(urlLabel);
+
+                var urlFormatInput = document.createElement('input');
+                urlFormatInput.type = 'text';
+                urlFormatInput.className = 'esBadgeUrlFormatInput';
+                urlFormatInput.placeholder = '{0}';
+                urlFormatInput.value = schema.ProviderIdBadgeUrlFormats[key] || '';
+                urlFormatInput.disabled = !!locked || !badgeToggle.checked;
+                urlFormatInput.title = 'Optional link template — "{0}" is replaced with the Value above. Leave ' +
+                    'blank to just link straight to that value (the default, and what RadarrId/SonarrId use — ' +
+                    'their Value IS the full link already). Only set a template here if the target URL is fixed ' +
+                    'no matter which connection produced the item, e.g. a public site like TheTVDB. Do NOT use ' +
+                    'this for anything host/port-specific to a connection — the template can\'t vary per ' +
+                    'connection, only the Value field can (build the full URL into Value instead, as RadarrId/' +
+                    'SonarrId do).';
+                urlFormatInput.addEventListener('input', function (e) {
+                    if (e.target.value) {
+                        schema.ProviderIdBadgeUrlFormats[key] = e.target.value;
+                    } else {
+                        delete schema.ProviderIdBadgeUrlFormats[key];
+                    }
+                    markSchemasDirty(view);
+                });
+                urlRow.appendChild(urlFormatInput);
+
+                providerBlock.appendChild(urlRow);
+
+                wrap.appendChild(providerBlock);
             });
 
             if (!locked) {
@@ -952,10 +1183,29 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             return wrap;
         }
 
+        function focusValueInputAfterKeyRename(view, newKey) {
+            var keys = Object.keys((store.get('schemas').filter(function (s) { return s.Id === view.querySelector('#esSchemaSelect').value; })[0] || {}).StaticQueryParams || {});
+            var idx = keys.indexOf(newKey);
+            if (idx < 0) return;
+            var rows = view.querySelectorAll('#esStaticQueryParamsWrap > div');
+            var row = rows[idx];
+            var valInput = row && row.querySelectorAll('input')[1];
+            if (valInput) valInput.focus();
+        }
+
+        function focusProviderIdValueInputAfterRename(view, newKey) {
+            var nameInput = view.querySelector('.esProviderIdKeyRow input[value="' + newKey.replace(/"/g, '\\"') + '"]');
+            if (!nameInput) return;
+            var block = nameInput.closest('.esProviderIdBlock');
+            var firstFieldInput = block && block.querySelector('.esMapRow .esMapTextInput, .esMapRow input');
+            if (firstFieldInput) firstFieldInput.focus();
+        }
+
         function buildStaticQueryParamsEditor(view, schema, locked) {
             if (!schema.StaticQueryParams) schema.StaticQueryParams = {};
 
             var wrap = document.createElement('div');
+            wrap.id = 'esStaticQueryParamsWrap';
             wrap.style.marginBottom = '0.9em';
 
             var label = document.createElement('label');
@@ -998,6 +1248,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     schema.StaticQueryParams[newKey] = val;
                     markSchemasDirty(view);
                     renderSchemaForm(view);
+                    focusValueInputAfterKeyRename(view, newKey);
                 });
 
                 row.appendChild(keyInput);

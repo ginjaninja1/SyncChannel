@@ -156,6 +156,24 @@ namespace SyncChannel.Configuration
         Identity
     }
 
+    public enum SegmentModifierKind { None, Left, Right, Substring, ArraySlice }
+
+    // Attached only to Kind=Field segments in the schema mapper — not
+    // offered on rule-builder conditions, which match the raw JSON value
+    // directly. Left/Right/Substring operate on the segment's final
+    // resolved string. ArraySlice operates on the raw list of values BEFORE
+    // the generic comma-join, so it can select a subset instead of always
+    // getting everything.
+    public class SegmentModifier
+    {
+        public SegmentModifierKind Kind { get; set; } = SegmentModifierKind.None;
+
+        // Left/Right: character count (Start only). Substring/ArraySlice:
+        // inclusive Start/End indices. End = -1 on ArraySlice means "all".
+        public int Start { get; set; }
+        public int End { get; set; } = -1;
+    }
+
     public class MappingSegment
     {
         public MappingSegmentKind Kind { get; set; } = MappingSegmentKind.CustomText;
@@ -163,6 +181,11 @@ namespace SyncChannel.Configuration
         // Meaningful only for Kind=Field (dotted JsonPath) and
         // Kind=CustomText (literal text). Ignored for the other three kinds.
         public string Value { get; set; } = string.Empty;
+
+        // Field-segment-only string/array modifier — see SegmentModifier.
+        // Null is the common case (every mapping segment before this
+        // existed, and most since) — no data-shape migration needed.
+        public SegmentModifier Modifier { get; set; }
     }
 
     // An orderable, admin-built recipe for one output field. Empty
@@ -277,6 +300,32 @@ namespace SyncChannel.Configuration
         // schema populates these through the identical mechanism a
         // custom schema would, rather than a privileged shortcut.
         public Dictionary<string, FieldMapping> ProviderIdFields { get; set; } = new Dictionary<string, FieldMapping>();
+
+        // Provider-id keys (from ProviderIdFields, above) opted in to get a
+        // clickable badge in Emby's edit-metadata UI. Backed by a fixed pool
+        // of 5 pre-compiled GenericProviderIdExternalId slot classes (see
+        // Providers/ProviderIdBadgeRegistry.cs) — Emby's IExternalId list is
+        // composed once at startup, so a 6th badge needs a 6th compiled
+        // class and a restart, not just flipping this toggle.
+        public List<string> BadgeEnabledProviderIdKeys { get; set; } = new List<string>();
+
+        // Optional per-key URL template, e.g. "https://thetvdb.com/movies/{0}".
+        // {0} is substituted with whatever ProviderIdFields[key] resolved to
+        // for that item — same single-substitution constraint Emby's own
+        // ProviderManager.GetExternalUrls has (confirmed via ILSpy: one
+        // value in, one Url out, no per-item override of the template
+        // itself). Defaults to "{0}" (pass-through) when a key has no entry
+        // here — the same behavior RadarrId/SonarrId already rely on, where
+        // the field itself is built to already resolve to the complete,
+        // connection-correct URL rather than a bare id. Only set a real
+        // template here for a key whose target URL shape is genuinely fixed
+        // regardless of which connection produced the item (e.g. a public
+        // site like TheTVDB) — for anything that varies by connection (like
+        // Radarr/Sonarr's own host:port), build the full URL into the field
+        // mapping instead and leave this blank.
+        public Dictionary<string, string> ProviderIdBadgeUrlFormats { get; set; } = new Dictionary<string, string>();
+
+        
 
         // The fields available in the rule builder's FILTER palette for
         // this schema. Unrelated to the output FieldMappings above — see

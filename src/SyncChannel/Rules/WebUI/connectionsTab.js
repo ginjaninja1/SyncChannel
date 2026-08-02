@@ -19,6 +19,25 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         var tracker = dirtyTracker.createTracker(editableConnectionsJson);
 
+        function computeDefaultDisplayLabel(app, connections, excludeId) {
+            var root = app.label.replace(/\s*\(built-in\)\s*/i, '').trim() || app.key;
+            var pattern = new RegExp('^' + root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d*)$', 'i');
+            var highest = 0;
+            var rootTaken = false;
+            connections.forEach(function (c) {
+                if (c.Id === excludeId) return;
+                var m = pattern.exec((c.DisplayLabel || '').trim());
+                if (!m) return;
+                if (!m[1]) { rootTaken = true; return; }
+                var n = parseInt(m[1], 10);
+                if (n > highest) highest = n;
+            });
+            if (!rootTaken && highest === 0) return root;
+            return root + Math.max(2, highest + 1);
+        }
+
+
+
         function editableConnectionsJson(items) {
             return JSON.stringify((items || []).map(function (connection) {
                 return {
@@ -26,6 +45,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     DisplayLabel: connection.DisplayLabel,
                     BaseUrl: connection.BaseUrl,
                     BaseUrlIsUserEntered: !!connection.BaseUrlIsUserEntered,
+                    DisplayLabelIsUserEntered: !!connection.DisplayLabelIsUserEntered,
                     ApiKey: connection.ApiKey,
                     SystemType: connection.SystemType,
                     ApiKeyParamName: connection.ApiKeyParamName
@@ -134,7 +154,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 labelInput.style.width = '10em';
                 labelInput.value = c.DisplayLabel;
                 labelInput.placeholder = 'Label';
-                labelInput.addEventListener('input', function (e) { c.DisplayLabel = e.target.value; });
+                labelInput.addEventListener('input', function (e) {
+                    c.DisplayLabel = e.target.value;
+                    c.DisplayLabelIsUserEntered = !!e.target.value;
+                });
                 labelInput.addEventListener('change', function () { store.emit('connectionsChanged'); });
 
                 var urlInput = document.createElement('input');
@@ -184,6 +207,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
                     customTypeInput.style.display = (app.key === 'custom') ? '' : 'none';
                     urlInput.placeholder = app.urlPlaceholder;
+
+                    if (!c.DisplayLabelIsUserEntered) {
+                        c.DisplayLabel = computeDefaultDisplayLabel(app, connections, c.Id);
+                        labelInput.value = c.DisplayLabel;
+                    }
 
                     if (app.key === 'custom') {
                         if (KNOWN_APPLICATIONS.some(function (known) {
@@ -371,7 +399,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var defaultApp = KNOWN_APPLICATIONS[0];
             connections.push({
                 Id: helpers.newId(),
-                DisplayLabel: 'New Connection',
+                DisplayLabel: computeDefaultDisplayLabel(defaultApp, connections),
+                DisplayLabelIsUserEntered: false,
                 BaseUrl: '',
                 BaseUrlIsUserEntered: false,
                 ApiKey: '',

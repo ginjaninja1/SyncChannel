@@ -333,9 +333,30 @@ namespace SyncChannel.Configuration
             return withIndex
                 .OrderByDescending(x => x.Field.IsFavorite)
                 .ThenBy(x => TypeRank(x.Field.Type))
+                .ThenBy(x => ImportanceRank(x.Field.JsonPath))
                 .ThenBy(x => x.Index)
                 .Select(x => x.Field)
                 .ToList();
+        }
+
+        // Secondary tiebreaker within each type group: fields an admin is
+        // likely to actually map (identity/display/date-ish things) sort
+        // ahead of fields that are more often filter-only (genres/tags/
+        // studio/urls), instead of pure first-seen order. Matched against
+        // only the field's own last path segment (not the full dotted path)
+        // so a nested field like "studios.name" is judged on "name", not
+        // coincidentally matched by an unrelated ancestor segment.
+        private static readonly string[] TopKeywords =
+            { "title", "name", "id", "image", "poster", "overview", "description", "summary", "year", "date" };
+        private static readonly string[] BottomKeywords =
+            { "genre", "tag", "studio", "keyword", "url", "website", "link" };
+
+        private static int ImportanceRank(string path)
+        {
+            var lastSegment = (path ?? string.Empty).Split('.').Last().ToLowerInvariant();
+            if (BottomKeywords.Any(k => lastSegment.Contains(k))) return 2;
+            if (TopKeywords.Any(k => lastSegment.Contains(k))) return 0;
+            return 1;
         }
 
         private static int TypeRank(SchemaFieldType type)

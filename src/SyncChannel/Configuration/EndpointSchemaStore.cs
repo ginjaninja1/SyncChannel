@@ -55,6 +55,7 @@
                     Save(file);
                 }
 
+                SyncChannel.Providers.ProviderIdBadgeRegistry.Refresh(file.Schemas);
                 return file;
             }
         }
@@ -69,6 +70,7 @@
                     Directory.CreateDirectory(dir);
 
                 File.WriteAllText(path, json.SerializeToString(file));
+                SyncChannel.Providers.ProviderIdBadgeRegistry.Refresh(file.Schemas);
             }
         }
 

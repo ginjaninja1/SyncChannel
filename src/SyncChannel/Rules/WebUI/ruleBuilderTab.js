@@ -176,6 +176,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             tag.innerText = '(' + type + ')';
             chip.appendChild(tag);
 
+            chip.dataset.dragLabel = displayName || fieldPath;
             dragEngine.makeDraggableSource(chip, 'field', function () {
                 return JSON.stringify({ path: fieldPath, type: type, display: displayName || fieldPath });
             });
