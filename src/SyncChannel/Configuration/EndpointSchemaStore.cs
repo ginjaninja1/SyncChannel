@@ -148,19 +148,42 @@
 
         private static FieldMapping Field(string jsonPath) => new FieldMapping
         {
-            Segments = new List<MappingSegment>
+            Segments = new List<MappingNode>
             {
-                new MappingSegment { Kind = MappingSegmentKind.Field, Value = jsonPath }
+                new MappingNode { Kind = MappingNodeKind.Field, Value = jsonPath }
+            }
+        };
+
+        // Poster URL, and anything else that needs "the Nth value out of a
+        // list field" — wraps a single Field node in an ArraySlice Function.
+        // Positional, not filtered by any sibling field (e.g. coverType):
+        // takes whichever entry the given index happens to be. Used for
+        // Radarr/Sonarr's images.remoteUrl, where index 0 has consistently
+        // been the poster in every response seen so far, but that's
+        // observed behavior, not a documented guarantee — see Evidence.md
+        // discipline. Revisit if either API ever reorders this.
+        private static FieldMapping ArraySliceField(string jsonPath, int start, int end) => new FieldMapping
+        {
+            Segments = new List<MappingNode>
+            {
+                new MappingNode
+                {
+                    Kind = MappingNodeKind.Function,
+                    Function = FunctionKind.ArraySlice,
+                    Start = start,
+                    End = end,
+                    Children = new List<MappingNode> { new MappingNode { Kind = MappingNodeKind.Field, Value = jsonPath } }
+                }
             }
         };
 
         private static FieldMapping ItemUrl(string pathPrefix, string jsonPath) => new FieldMapping
         {
-            Segments = new List<MappingSegment>
+            Segments = new List<MappingNode>
             {
-                new MappingSegment { Kind = MappingSegmentKind.BaseUrl },
-                new MappingSegment { Kind = MappingSegmentKind.CustomText, Value = pathPrefix },
-                new MappingSegment { Kind = MappingSegmentKind.Field, Value = jsonPath }
+                new MappingNode { Kind = MappingNodeKind.BaseUrl },
+                new MappingNode { Kind = MappingNodeKind.CustomText, Value = pathPrefix },
+                new MappingNode { Kind = MappingNodeKind.Field, Value = jsonPath }
             }
         };
 
@@ -183,10 +206,7 @@
             OriginalTitleField = Field("originalTitle"),
             YearField = Field("year"),
             OverviewField = Field("overview"),
-            // "images" resolves via the images[].coverType=="poster"->remoteUrl
-            // special case inside HttpFetchProvider.ResolveFieldSegmentValue —
-            // a single Field segment is enough, no template needed.
-            PosterUrlField = Field("images"),
+            PosterUrlField = ArraySliceField("images.remoteUrl", 0, 0),
             ProviderIdFields = new Dictionary<string, FieldMapping>
             {
                 ["Tmdb"] = Field("tmdbId"),
@@ -237,7 +257,7 @@
             OriginalTitleField = Field("title"),
             YearField = Field("year"),
             OverviewField = Field("overview"),
-            PosterUrlField = Field("images"),
+            PosterUrlField = ArraySliceField("images.remoteUrl", 0, 0),
             ProviderIdFields = new Dictionary<string, FieldMapping>
             {
                 ["Tvdb"] = Field("tvdbId"),

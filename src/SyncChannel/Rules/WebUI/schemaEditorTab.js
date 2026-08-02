@@ -212,6 +212,35 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         ];
         var STATIC_MAPPING_DRAG_KINDS = STATIC_MAPPING_CHIPS.map(function (c) { return c.dragKind; });
 
+        // Function palette presets. Each is dropped either as a fresh empty
+        // shell (dropped into empty space in the field builder) or onto an
+        // existing node's own drag handle (which wraps that node as the
+        // function's single child, keeping whatever was already built).
+        // Defaults match what was agreed: Array defaults to picking just
+        // the first element, matching how an admin would want it 9 times
+        // out of 10.
+        var FUNCTION_PRESETS = [
+            { name: 'Left', title: 'Keep the first N characters of whatever this wraps, e.g. Left[4] on "1974-03-03" gives "1974"', defaults: { Function: 'Left', Start: 4, End: -1 } },
+            { name: 'Right', title: 'Keep the last N characters of whatever this wraps', defaults: { Function: 'Right', Start: 4, End: -1 } },
+            { name: 'Substring', title: 'Keep characters from index Start to End (inclusive) of whatever this wraps', defaults: { Function: 'Substring', Start: 0, End: 3 } },
+            { name: 'Array', title: 'Pick element(s) out of a list field by index — defaults to just the first element. Only valid wrapping a single list-type field.', defaults: { Function: 'ArraySlice', Start: 0, End: 0 } }
+        ];
+
+        function renderFunctionPaletteChips(container) {
+            container.innerHTML = '';
+            FUNCTION_PRESETS.forEach(function (preset) {
+                var chip = document.createElement('span');
+                chip.className = 'rcsChip rcsChip-modifier';
+                chip.innerText = preset.name;
+                chip.title = preset.title;
+                chip.dataset.dragLabel = preset.name;
+                dragEngine.makeDraggableSource(chip, 'mapfunction', function () {
+                    return JSON.stringify(preset.defaults);
+                });
+                container.appendChild(chip);
+            });
+        }
+
         function renderStaticMappingChips(container, connection) {
             container.innerHTML = '';
 
@@ -234,66 +263,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             });
         }
 
-        // Compact text notation <-> Modifier object. Mirrors
-        // HttpFetchProvider's C# application logic exactly (Left/Right take
-        // a character count, Substring/ArraySlice take inclusive start:end,
-        // ArraySlice end -1 means "all") — kept in one place so the preview
-        // shown here never drifts from what actually gets resolved server-side.
-        function formatModifier(modifier) {
-            if (!modifier || modifier.Kind === 'None') return '';
-            switch (modifier.Kind) {
-                case 'Left': return 'Left[' + modifier.Start + ']';
-                case 'Right': return 'Right[' + modifier.Start + ']';
-                case 'Substring': return 'Substring[' + modifier.Start + ':' + modifier.End + ']';
-                case 'ArraySlice':
-                    if (modifier.End < 0) return '[all]';
-                    return modifier.Start === modifier.End ? '[' + modifier.Start + ']' : '[' + modifier.Start + ':' + modifier.End + ']';
-                default: return '';
-            }
-        }
-
-        function parseModifierText(text) {
-            var t = (text || '').trim();
-            if (!t) return { Kind: 'None', Start: 0, End: -1 };
-
-            var m;
-            if ((m = /^left\[(\d+)\]$/i.exec(t))) return { Kind: 'Left', Start: parseInt(m[1], 10), End: -1 };
-            if ((m = /^right\[(\d+)\]$/i.exec(t))) return { Kind: 'Right', Start: parseInt(m[1], 10), End: -1 };
-            if ((m = /^substring\[(\d+):(\d+)\]$/i.exec(t))) return { Kind: 'Substring', Start: parseInt(m[1], 10), End: parseInt(m[2], 10) };
-            if (/^\[all\]$/i.test(t)) return { Kind: 'ArraySlice', Start: 0, End: -1 };
-            if ((m = /^\[(\d+):(\d+)\]$/.exec(t))) return { Kind: 'ArraySlice', Start: parseInt(m[1], 10), End: parseInt(m[2], 10) };
-            if ((m = /^\[(\d+)\]$/.exec(t))) return { Kind: 'ArraySlice', Start: parseInt(m[1], 10), End: parseInt(m[1], 10) };
-
-            return null; // unparseable — caller keeps previous value, flags invalid
-        }
-
-        // Client-side mirror of HttpFetchProvider's ApplyStringModifier /
-        // ApplyArraySlice, used only for the hover-preview examples — the
-        // server is always the source of truth for the actual resolved value.
-        function applyModifierToValues(values, modifier) {
-            if (!modifier || modifier.Kind === 'None') return values;
-            if (modifier.Kind === 'ArraySlice') {
-                if (modifier.End < 0) return [values.join(', ')];
-                var start = Math.max(0, Math.min(modifier.Start, values.length - 1));
-                var end = Math.max(start, Math.min(modifier.End, values.length - 1));
-                return [values.slice(start, end + 1).join(', ')];
-            }
-            return values.map(function (v) {
-                if (modifier.Kind === 'Left') return String(v).slice(0, Math.max(0, modifier.Start));
-                if (modifier.Kind === 'Right') {
-                    var n = Math.max(0, Math.min(modifier.Start, v.length));
-                    return String(v).slice(v.length - n);
-                }
-                if (modifier.Kind === 'Substring') {
-                    var s = Math.max(0, Math.min(modifier.Start, v.length));
-                    var e = Math.max(s, Math.min(modifier.End, v.length - 1));
-                    return String(v).slice(s, e + 1);
-                }
-                return v;
-            });
-        }
-
-
         function mappingSegmentLabel(seg, fieldsByPath) {
             switch (seg.Kind) {
                 case 'Field':
@@ -305,8 +274,77 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 case 'ApiKeyValue': return '{apiKeyValue}';
                 case 'BaseUrl': return '{baseUrl}';
                 case 'Identity': return '{identity}';
+                case 'Function': return functionDisplayText(seg);
                 default: return '?';
             }
+        }
+
+        // Compact text notation for a Function node's own badge + param
+        // input, e.g. "Left" chip showing "[4]" beside it, or "Array"
+        // chip showing "[0]"/"[0:2]"/"[all]". Kept purely for display —
+        // parseModifierParamText below is the inverse, used when the param
+        // text is edited directly.
+        function functionDisplayText(node) {
+            switch (node.Function) {
+                case 'Left': return 'Left';
+                case 'Right': return 'Right';
+                case 'Substring': return 'Substring';
+                case 'ArraySlice': return 'Array';
+                default: return 'fn';
+            }
+        }
+
+        function formatModifierParamText(node) {
+            switch (node.Function) {
+                case 'Left':
+                case 'Right':
+                    return String(node.Start);
+                case 'Substring':
+                    return node.Start + ':' + node.End;
+                case 'ArraySlice':
+                    if (node.End < 0) return 'all';
+                    return node.Start === node.End ? String(node.Start) : (node.Start + ':' + node.End);
+                default:
+                    return '';
+            }
+        }
+
+        // Parses just the bracket contents (the part that's actually
+        // editable text) back into {Start, End} for the node's existing
+        // Function kind — the function itself (Left/Right/Substring/Array)
+        // is fixed by which palette chip was dropped, never re-typed.
+        function parseModifierParamText(functionKind, text) {
+            var t = (text || '').trim();
+            if (functionKind === 'ArraySlice') {
+                if (/^all$/i.test(t)) return { Start: 0, End: -1 };
+                var m2 = /^(\d+):(\d+)$/.exec(t);
+                if (m2) return { Start: parseInt(m2[1], 10), End: parseInt(m2[2], 10) };
+                var m1 = /^(\d+)$/.exec(t);
+                if (m1) return { Start: parseInt(m1[1], 10), End: parseInt(m1[1], 10) };
+                return null;
+            }
+            if (functionKind === 'Substring') {
+                var ms = /^(\d+):(\d+)$/.exec(t);
+                return ms ? { Start: parseInt(ms[1], 10), End: parseInt(ms[2], 10) } : null;
+            }
+            // Left / Right
+            var mn = /^(\d+)$/.exec(t);
+            return mn ? { Start: parseInt(mn[1], 10), End: -1 } : null;
+        }
+
+        // ArraySlice is only meaningful wrapping a single list-typed field —
+        // Left/Right/Substring always resolve against a string and are
+        // always valid. CachedType is stamped onto Field nodes whenever
+        // they're rendered (see renderNode) so this can be checked without
+        // re-running field discovery; if a Field node hasn't been rendered
+        // yet this session its CachedType is undefined, in which case this
+        // fails open (assumes valid) rather than blocking on missing info.
+        function functionNodeValidity(node) {
+            if (node.Kind !== 'Function') return true;
+            if (node.Function !== 'ArraySlice') return true;
+            if (node.Children.length !== 1 || node.Children[0].Kind !== 'Field') return false;
+            var type = node.Children[0].CachedType;
+            return type === undefined || type === 'List';
         }
 
         function findMappingInsertionIndex(containerEl, clientX, excludeEl, clientY) {
@@ -426,6 +464,74 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 warnEl.innerText = roleFieldWarning(warnRoleKey, f ? f.Type : null) || '';
             }
 
+            // Mirrors HttpFetchProvider's C# resolution logic for preview
+            // purposes only — the server is always the source of truth for
+            // the actual resolved value. Operates on the node tree directly:
+            // a Function node concatenates its Children's preview text (or,
+            // for ArraySlice, reads its single Field child's raw example
+            // list directly), then applies its own operation.
+            function previewResolveNode(node, fbp, connection, exampleIndex) {
+                switch (node.Kind) {
+                    case 'Field':
+                        var field = fbp[node.Value];
+                        var examples = field && field.Examples ? field.Examples : [];
+                        if (!examples.length) return { text: '', hasFieldValue: false };
+                        return { text: String(examples[Math.min(exampleIndex, examples.length - 1)]), hasFieldValue: true };
+                    case 'CustomText':
+                        return { text: node.Value || '', hasFieldValue: false };
+                    case 'BaseUrl':
+                        return { text: (connection && connection.BaseUrl) || '', hasFieldValue: false };
+                    case 'ApiKeyName':
+                        return { text: (connection && connection.ApiKeyParamName) || '', hasFieldValue: false };
+                    case 'ApiKeyValue':
+                        return { text: (connection && connection.ApiKey) ? '\u2022\u2022\u2022\u2022\u2022\u2022' : '', hasFieldValue: false };
+                    case 'Identity':
+                        return { text: '{identity}', hasFieldValue: false };
+                    case 'Function':
+                        return previewResolveFunction(node, fbp, connection, exampleIndex);
+                    default:
+                        return { text: '', hasFieldValue: false };
+                }
+            }
+
+            function previewResolveFunction(node, fbp, connection, exampleIndex) {
+                if (node.Function === 'ArraySlice') {
+                    if (node.Children.length === 1 && node.Children[0].Kind === 'Field') {
+                        var field = fbp[node.Children[0].Value];
+                        var examples = (field && field.Examples) || [];
+                        if (!examples.length) return { text: '', hasFieldValue: false };
+                        var sliced = node.End < 0 ? examples : examples.slice(
+                            Math.max(0, Math.min(node.Start, examples.length - 1)),
+                            Math.max(0, Math.min(node.End, examples.length - 1)) + 1
+                        );
+                        return { text: sliced.join(', '), hasFieldValue: true };
+                    }
+                    return { text: '', hasFieldValue: false };
+                }
+                var hasFieldValue = false;
+                var joined = node.Children.map(function (c) {
+                    var r = previewResolveNode(c, fbp, connection, exampleIndex);
+                    if (r.hasFieldValue) hasFieldValue = true;
+                    return r.text;
+                }).join('');
+                return { text: applyStringFunctionPreview(joined, node), hasFieldValue: hasFieldValue };
+            }
+
+            function applyStringFunctionPreview(value, node) {
+                if (!value) return value || '';
+                if (node.Function === 'Left') return value.slice(0, Math.max(0, node.Start));
+                if (node.Function === 'Right') {
+                    var n = Math.max(0, Math.min(node.Start, value.length));
+                    return value.slice(value.length - n);
+                }
+                if (node.Function === 'Substring') {
+                    var s = Math.max(0, Math.min(node.Start, value.length));
+                    var e = Math.max(s, Math.min(node.End, value.length - 1));
+                    return value.slice(s, e + 1);
+                }
+                return value;
+            }
+
             function resolvedExamples() {
                 var fbp = fieldsByPath();
                 var connection = mapperConnId ? store.findConnection(mapperConnId) : null;
@@ -433,23 +539,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 for (var exampleIndex = 0; exampleIndex < 3; exampleIndex++) {
                     var hasFieldValue = false;
                     var value = mapping.Segments.map(function (seg) {
-                        if (seg.Kind === 'Field') {
-                            var field = fbp[seg.Value];
-                            var examples = field && field.Examples ? field.Examples : [];
-                            if (!examples.length) return '';
-                            hasFieldValue = true;
-                            if (seg.Modifier && seg.Modifier.Kind === 'ArraySlice') {
-                                return applyModifierToValues(examples, seg.Modifier)[0] || '';
-                            }
-                            var raw = String(examples[Math.min(exampleIndex, examples.length - 1)]);
-                            return applyModifierToValues([raw], seg.Modifier)[0] || '';
-                        }
-                        if (seg.Kind === 'CustomText') return seg.Value || '';
-                        if (seg.Kind === 'BaseUrl') return (connection && connection.BaseUrl) || '';
-                        if (seg.Kind === 'ApiKeyName') return (connection && connection.ApiKeyParamName) || '';
-                        if (seg.Kind === 'ApiKeyValue') return (connection && connection.ApiKey) ? '\u2022\u2022\u2022\u2022\u2022\u2022' : '';
-                        if (seg.Kind === 'Identity') return '{identity}';
-                        return '';
+                        var r = previewResolveNode(seg, fbp, connection, exampleIndex);
+                        if (r.hasFieldValue) hasFieldValue = true;
+                        return r.text;
                     }).join('');
                     if (value && (hasFieldValue || exampleIndex === 0) && output.indexOf(value) === -1) output.push(value);
                 }
@@ -490,220 +582,355 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             legend.addEventListener('focus', showExamples);
             legend.addEventListener('blur', hideExamples);
 
-            function renderSegments() {
-                valueEl.innerHTML = '';
-                var fbp = fieldsByPath();
-                if (mappingHandle) valueEl.appendChild(mappingHandle);
+            // ---- Recursive node-tree rendering ----
 
-                if (!mapping.Segments.length) {
+            // Renders `nodesArray` (mapping.Segments, or some Function
+            // node's own Children) into `containerEl` and wires its
+            // insertion-anchor drop targets. isRoot controls whether the
+            // whole-mapping drag handle and the hover-examples element are
+            // included alongside the chips (only true at the top level).
+            function renderNodeList(containerEl, nodesArray, fbp, connection, isRoot) {
+                containerEl.innerHTML = '';
+
+                if (isRoot && mappingHandle) containerEl.appendChild(mappingHandle);
+
+                if (!nodesArray.length) {
                     var empty = document.createElement('span');
                     empty.className = 'fieldDescription esMapEmptyHint';
-                    empty.innerText = locked ? '(unmapped)' : 'drop a building block here \u2192';
-                    valueEl.appendChild(empty);
+                    empty.innerText = locked ? '(unmapped)' : (isRoot ? 'drop a building block here \u2192' : 'drop something inside \u2192');
+                    containerEl.appendChild(empty);
                 }
 
-                mapping.Segments.forEach(function (seg, idx) {
-                    var chip = document.createElement('span');
-                    chip.className = 'rcsChip esMapSeg esMapSeg-' + seg.Kind.toLowerCase();
-                    // (modChip appended after the field-value chip below, once the value chip finishes building)
-
-                    if (!locked) {
-                        var dragHandle = document.createElement('span');
-                        dragHandle.className = 'esMapDragHandle';
-                        dragHandle.innerText = '\u2630';
-                        dragHandle.dataset.dragLabel = mappingSegmentLabel(seg, fbp);
-                        dragHandle.title = 'Drag to move within this field, or copy to another field';
-                        dragEngine.makeDraggableSource(dragHandle, 'mapseg', function () {
-                            return JSON.stringify({ SourceId: mappingDragId, Index: idx, Segment: seg });
-                        }, function () { return chip; });
-                        chip.appendChild(dragHandle);
-                    }
-
-                    if (seg.Kind === 'CustomText' && !locked) {
-                        var input = document.createElement('input');
-                        input.type = 'text';
-                        input.className = 'esMapTextInput';
-                        input.value = seg.Value || '';
-                        input.placeholder = 'text';
-                        input.size = Math.min(20, Math.max(3, (seg.Value || '').length));
-                        chip.title = 'Literal text: ' + (seg.Value || '(empty)');
-                        input.addEventListener('input', function (e) {
-                            seg.Value = e.target.value;
-                            input.size = Math.min(20, Math.max(3, e.target.value.length));
-                            chip.title = 'Literal text: ' + (e.target.value || '(empty)');
-                            refreshExamples();
-                            markSchemasDirty(activeView);
-                        });
-                        chip.appendChild(input);
-                    } else {
-                        var textSpan = document.createElement('span');
-                        textSpan.innerText = mappingSegmentLabel(seg, fbp);
-                        chip.appendChild(textSpan);
-                        if (seg.Kind === 'Field' && fbp[seg.Value] && fbp[seg.Value].Examples && fbp[seg.Value].Examples.length) {
-                            chip.title = fbp[seg.Value].Examples.join('\n');
-                        } else if (seg.Kind === 'BaseUrl') {
-                            var baseConnection = mapperConnId ? store.findConnection(mapperConnId) : null;
-                            chip.title = 'Value: ' + ((baseConnection && baseConnection.BaseUrl) || '(not set)');
-                        } else if (seg.Kind === 'ApiKeyName') {
-                            var nameConnection = mapperConnId ? store.findConnection(mapperConnId) : null;
-                            chip.title = 'Value: ' + ((nameConnection && nameConnection.ApiKeyParamName) || '(not set)');
-                        } else if (seg.Kind === 'ApiKeyValue') {
-                            var keyConnection = mapperConnId ? store.findConnection(mapperConnId) : null;
-                            chip.title = 'Value: ' + ((keyConnection && keyConnection.ApiKey) ? '(configured API key — hidden)' : '(not set)');
-                        } else if (seg.Kind === 'Identity') {
-                            chip.title = 'Value: the resolved Identity field for this item';
-                        }
-                    }
-
-                    if (!locked) {
-                        var xBtn = document.createElement('span');
-                        xBtn.className = 'esMapSegRemove';
-                        xBtn.innerText = '\u2715';
-                        xBtn.title = 'Remove this piece';
-                        xBtn.addEventListener('click', function () {
-                            mapping.Segments.splice(idx, 1);
-                            markSchemasDirty(activeView);
-                            renderSegments();
-                            refreshWarning();
-                        });
-                        chip.appendChild(xBtn);
-                    }
-
-                    valueEl.appendChild(chip);
-
-                    if (seg.Kind === 'Field' && !locked) {
-                        var field = fbp[seg.Value];
-                        var modChip = document.createElement('span');
-                        modChip.className = 'rcsChip esMapSeg rcsChip-modifier';
-                        modChip.title = 'String/array function on this field — e.g. Left[4], Right[2], Substring[0:3], [0:0], [1:2], [all]. Blank clears it.';
-
-                        var modInput = document.createElement('input');
-                        modInput.type = 'text';
-                        modInput.className = 'esMapModifierInput';
-                        modInput.placeholder = field && field.Type === 'List' ? '[0:0]' : 'fn';
-                        modInput.value = formatModifier(seg.Modifier);
-
-                        function refreshModHover() {
-                            if (!field || !field.Examples || !field.Examples.length || !seg.Modifier) {
-                                modChip.title = 'String/array function on this field — e.g. Left[4], Right[2], Substring[0:3], [0:0], [1:2], [all].';
-                                return;
-                            }
-                            var applied = applyModifierToValues(field.Examples, seg.Modifier);
-                            modChip.title = applied.slice(0, 3).join('\n') || 'No examples available.';
-                        }
-                        refreshModHover();
-
-                        modInput.addEventListener('input', function (e) {
-                            var parsed = parseModifierText(e.target.value);
-                            if (parsed === null) {
-                                modInput.classList.add('esMapModifierInvalid');
-                                return;
-                            }
-                            modInput.classList.remove('esMapModifierInvalid');
-                            seg.Modifier = parsed.Kind === 'None' ? null : parsed;
-                            refreshModHover();
-                            refreshExamples();
-                            markSchemasDirty(activeView);
-                        });
-                        modInput.addEventListener('blur', function () {
-                            // Revert visibly-invalid leftover text back to whatever
-                            // last actually applied, rather than leaving a red,
-                            // unparsed string sitting in the field.
-                            if (modInput.classList.contains('esMapModifierInvalid')) {
-                                modInput.value = formatModifier(seg.Modifier);
-                                modInput.classList.remove('esMapModifierInvalid');
-                            }
-                        });
-
-                        modChip.appendChild(modInput);
-                        valueEl.appendChild(modChip);
-                    }
+                nodesArray.forEach(function (node, idx) {
+                    containerEl.appendChild(renderNode(node, nodesArray, idx, fbp, connection));
                 });
 
-                valueEl.appendChild(examplesEl);
+                if (isRoot) containerEl.appendChild(examplesEl);
+
+                if (!locked) wireContainerDropTargets(containerEl, nodesArray);
+            }
+
+            function renderNode(node, parentArray, idx, fbp, connection) {
+                if (node.Kind === 'Function') {
+                    return renderFunctionNode(node, parentArray, idx, fbp, connection);
+                }
+
+                var chip = document.createElement('span');
+                chip.className = 'rcsChip esMapSeg esMapSeg-' + node.Kind.toLowerCase();
+
+                if (!locked) {
+                    var dragHandle = document.createElement('span');
+                    dragHandle.className = 'esMapDragHandle';
+                    dragHandle.innerText = '\u2630';
+                    dragHandle.dataset.dragLabel = mappingSegmentLabel(node, fbp);
+                    dragHandle.title = 'Drag to move within this field, or copy to another field. Drop a function chip here to wrap this in it.';
+                    dragEngine.makeDraggableSource(dragHandle, 'mapseg', function () {
+                        return JSON.stringify({ SourceId: mappingDragId, Path: nodePath(node), Node: node });
+                    }, function () { return chip; });
+                    chip.appendChild(dragHandle);
+
+                    // Wrap target: dropping a function preset directly onto
+                    // THIS node's own handle wraps just this node — distinct
+                    // from the container-level before/after insertion drop
+                    // targets (wireContainerDropTargets), which only insert
+                    // beside things, never wrap them.
+                    dragEngine.registerDropTarget(dragHandle, ['mapfunction'], function (rawValue) {
+                        wrapNodeWithFunction(node, parentArray, idx, rawValue);
+                    });
+                }
+
+                if (node.Kind === 'CustomText' && !locked) {
+                    var input = document.createElement('input');
+                    input.type = 'text';
+                    input.className = 'esMapTextInput';
+                    input.value = node.Value || '';
+                    input.placeholder = 'text';
+                    input.size = Math.min(20, Math.max(3, (node.Value || '').length));
+                    chip.title = 'Literal text: ' + (node.Value || '(empty)');
+                    input.addEventListener('input', function (e) {
+                        node.Value = e.target.value;
+                        input.size = Math.min(20, Math.max(3, e.target.value.length));
+                        chip.title = 'Literal text: ' + (e.target.value || '(empty)');
+                        refreshExamples();
+                        markSchemasDirty(activeView);
+                    });
+                    chip.appendChild(input);
+                } else {
+                    var textSpan = document.createElement('span');
+                    textSpan.innerText = mappingSegmentLabel(node, fbp);
+                    chip.appendChild(textSpan);
+                    if (node.Kind === 'Field') {
+                        var field = fbp[node.Value];
+                        node.CachedType = field ? field.Type : node.CachedType;
+                        if (field && field.Examples && field.Examples.length) chip.title = field.Examples.join('\n');
+                    } else if (node.Kind === 'BaseUrl') {
+                        chip.title = 'Value: ' + ((connection && connection.BaseUrl) || '(not set)');
+                    } else if (node.Kind === 'ApiKeyName') {
+                        chip.title = 'Value: ' + ((connection && connection.ApiKeyParamName) || '(not set)');
+                    } else if (node.Kind === 'ApiKeyValue') {
+                        chip.title = 'Value: ' + ((connection && connection.ApiKey) ? '(configured API key — hidden)' : '(not set)');
+                    } else if (node.Kind === 'Identity') {
+                        chip.title = 'Value: the resolved Identity field for this item';
+                    }
+                }
+
+                if (!locked) {
+                    var xBtn = document.createElement('span');
+                    xBtn.className = 'esMapSegRemove';
+                    xBtn.innerText = '\u2715';
+                    xBtn.title = 'Remove this piece';
+                    xBtn.addEventListener('click', function () {
+                        parentArray.splice(idx, 1);
+                        markSchemasDirty(activeView);
+                        renderSegments();
+                        refreshWarning();
+                    });
+                    chip.appendChild(xBtn);
+                }
+
+                return chip;
+            }
+
+            function renderFunctionNode(node, parentArray, idx, fbp, connection) {
+                var wrap = document.createElement('span');
+                var valid = functionNodeValidity(node);
+                wrap.className = 'rcsChip esMapSeg esMapSeg-function ' + (valid ? 'rcsChip-modifier' : 'rcsChip-modifier-invalid');
+                wrap.dataset.mapNodeValid = valid ? '1' : '0';
+
+                if (!locked) {
+                    var dragHandle = document.createElement('span');
+                    dragHandle.className = 'esMapDragHandle';
+                    dragHandle.innerText = '\u2630';
+                    dragHandle.dataset.dragLabel = functionDisplayText(node);
+                    dragHandle.title = 'Drag to move this function (and everything inside it). Drop another function chip here to wrap it further.';
+                    dragEngine.makeDraggableSource(dragHandle, 'mapseg', function () {
+                        return JSON.stringify({ SourceId: mappingDragId, Path: nodePath(node), Node: node });
+                    }, function () { return wrap; });
+                    wrap.appendChild(dragHandle);
+
+                    dragEngine.registerDropTarget(dragHandle, ['mapfunction'], function (rawValue) {
+                        wrapNodeWithFunction(node, parentArray, idx, rawValue);
+                    });
+                }
+
+                var badge = document.createElement('span');
+                badge.className = 'esMapFunctionBadge';
+                badge.innerText = functionDisplayText(node);
+                badge.title = valid
+                    ? 'Function applied to whatever is inside the brackets.'
+                    : 'Array only works wrapping a single list-type field — this won\'t resolve to anything as configured. Saving is blocked until this is fixed.';
+                wrap.appendChild(badge);
+
+                var paramInput = document.createElement('input');
+                paramInput.type = 'text';
+                paramInput.className = 'esMapModifierInput';
+                paramInput.value = formatModifierParamText(node);
+                paramInput.disabled = !!locked;
+                paramInput.title = node.Function === 'ArraySlice'
+                    ? 'Index, or start:end, or "all" — e.g. 0, 0:1, all'
+                    : 'Character count' + (node.Function === 'Substring' ? ' as start:end' : '');
+                paramInput.addEventListener('input', function (e) {
+                    var parsed = parseModifierParamText(node.Function, e.target.value);
+                    if (!parsed) { paramInput.classList.add('esMapModifierInvalid'); return; }
+                    paramInput.classList.remove('esMapModifierInvalid');
+                    node.Start = parsed.Start;
+                    node.End = parsed.End;
+                    refreshExamples();
+                    markSchemasDirty(activeView);
+                });
+                paramInput.addEventListener('blur', function () {
+                    if (paramInput.classList.contains('esMapModifierInvalid')) {
+                        paramInput.value = formatModifierParamText(node);
+                        paramInput.classList.remove('esMapModifierInvalid');
+                    }
+                });
+                wrap.appendChild(paramInput);
+
+                var openBracket = document.createElement('span');
+                openBracket.innerText = '[';
+                wrap.appendChild(openBracket);
+
+                var childrenEl = document.createElement('span');
+                childrenEl.className = 'esMapFunctionChildren';
+                wrap.appendChild(childrenEl);
+
+                var closeBracket = document.createElement('span');
+                closeBracket.innerText = ']';
+                wrap.appendChild(closeBracket);
+
+                if (!locked) {
+                    var unwrapBtn = document.createElement('span');
+                    unwrapBtn.className = 'esMapSegRemove';
+                    unwrapBtn.innerText = '\u21b1';
+                    unwrapBtn.title = 'Unwrap: remove just this function, keeping what\'s inside it';
+                    unwrapBtn.addEventListener('click', function () {
+                        Array.prototype.splice.apply(parentArray, [idx, 1].concat(node.Children));
+                        markSchemasDirty(activeView);
+                        renderSegments();
+                    });
+                    wrap.appendChild(unwrapBtn);
+
+                    var xBtn = document.createElement('span');
+                    xBtn.className = 'esMapSegRemove';
+                    xBtn.innerText = '\u2715';
+                    xBtn.title = 'Remove this function AND everything inside it';
+                    xBtn.addEventListener('click', function () {
+                        parentArray.splice(idx, 1);
+                        markSchemasDirty(activeView);
+                        renderSegments();
+                        refreshWarning();
+                    });
+                    wrap.appendChild(xBtn);
+                }
+
+                renderNodeList(childrenEl, node.Children, fbp, connection, false);
+
+                return wrap;
+            }
+
+            // Locates a node's path — an array of indices from
+            // mapping.Segments down to this exact node — by searching the
+            // tree. Used as the drag payload's move-target reference
+            // instead of a flat index, since a node can live at any depth.
+            function nodePath(target, nodes, prefix) {
+                nodes = nodes || mapping.Segments;
+                prefix = prefix || [];
+                for (var i = 0; i < nodes.length; i++) {
+                    if (nodes[i] === target) return prefix.concat(i);
+                    if (nodes[i].Kind === 'Function') {
+                        var found = nodePath(target, nodes[i].Children, prefix.concat(i));
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+
+            function arrayAndIndexForPath(path) {
+                var nodes = mapping.Segments;
+                for (var i = 0; i < path.length - 1; i++) {
+                    nodes = nodes[path[i]].Children;
+                }
+                return { array: nodes, index: path[path.length - 1] };
+            }
+
+            function wrapNodeWithFunction(node, parentArray, idx, rawPresetValue) {
+                var preset;
+                try { preset = JSON.parse(rawPresetValue); } catch (e) { return; }
+                if (!preset || !preset.Function) return;
+                var fnNode = {
+                    Kind: 'Function',
+                    Function: preset.Function,
+                    Start: preset.Start,
+                    End: preset.End,
+                    Children: [node]
+                };
+                parentArray.splice(idx, 1, fnNode);
+                markSchemasDirty(activeView);
+                renderSegments();
+            }
+
+            // True if `arr` is `node`'s own Children array (at any depth) —
+            // prevents dropping a function inside its own children, which
+            // would otherwise splice it out of the tree it's still nested
+            // within and corrupt the structure.
+            function isDescendantArray(node, arr) {
+                if (node.Kind !== 'Function') return false;
+                if (node.Children === arr) return true;
+                return node.Children.some(function (c) { return isDescendantArray(c, arr); });
+            }
+
+            function cloneNode(node) {
+                var copy = { Kind: node.Kind, Value: node.Value || '' };
+                if (node.Kind === 'Function') {
+                    copy.Function = node.Function;
+                    copy.Start = node.Start;
+                    copy.End = node.End;
+                    copy.Children = (node.Children || []).map(cloneNode);
+                }
+                return copy;
+            }
+
+            function wireContainerDropTargets(containerEl, nodesArray) {
+                var onHover = function (clientX, clientY, reorderElement) {
+                    showMappingInsertionIndicator(containerEl, clientX, reorderElement, clientY);
+                };
+
+                // Insert a brand-new leaf (field/text/apikey/baseurl) or an
+                // empty function shell at the anchor point.
+                dragEngine.registerDropTarget(containerEl, ['field'].concat(STATIC_MAPPING_DRAG_KINDS).concat(['mapfunction']), function (rawValue, reorderElement, clientYIgnored, clientX) {
+                    var parsed = null;
+                    try { parsed = JSON.parse(rawValue); } catch (e) { /* not JSON */ }
+
+                    var node;
+                    if (parsed && parsed.path) {
+                        node = { Kind: 'Field', Value: parsed.path };
+                    } else if (parsed && parsed.Function) {
+                        node = { Kind: 'Function', Function: parsed.Function, Start: parsed.Start, End: parsed.End, Children: [] };
+                    } else {
+                        node = { Kind: rawValue, Value: '' };
+                    }
+
+                    var insertAt = findMappingInsertionIndex(containerEl, clientX, null, clientYIgnored);
+                    nodesArray.splice(insertAt, 0, node);
+                    renderSegments();
+                    markSchemasDirty(activeView);
+                    if (node.Kind === 'CustomText') {
+                        var inputs = containerEl.querySelectorAll('.esMapTextInput');
+                        if (inputs.length) inputs[Math.min(insertAt, inputs.length - 1)].focus();
+                    }
+                }, 'rcsDragOver', onHover);
+
+                // Move an existing node (leaf, or a whole function subtree)
+                // here from elsewhere in the SAME mapping, or copy one in
+                // from a different field's mapping.
+                dragEngine.registerDropTarget(containerEl, ['mapseg'], function (value, reorderElement, clientYIgnored, clientX) {
+                    var payload;
+                    try { payload = JSON.parse(value); } catch (e) { return; }
+                    if (!payload || !payload.Node) return;
+                    var toIdx = findMappingInsertionIndex(
+                        containerEl,
+                        clientX,
+                        payload.SourceId === mappingDragId ? reorderElement : null,
+                        clientYIgnored
+                    );
+                    if (payload.SourceId === mappingDragId && payload.Path) {
+                        if (isDescendantArray(payload.Node, nodesArray)) return;
+                        var loc = arrayAndIndexForPath(payload.Path);
+                        var moved = loc.array.splice(loc.index, 1)[0];
+                        if (!moved) return;
+                        nodesArray.splice(toIdx, 0, moved);
+                    } else {
+                        nodesArray.splice(toIdx, 0, cloneNode(payload.Node));
+                    }
+                    renderSegments();
+                    markSchemasDirty(activeView);
+                }, 'rcsDragOver', onHover);
+
+                dragEngine.registerDropTarget(containerEl, ['mapmapping'], function (value, reorderElement, clientY, clientX) {
+                    var payload;
+                    try { payload = JSON.parse(value); } catch (e) { return; }
+                    if (!payload || !Array.isArray(payload.Segments) || payload.SourceId === mappingDragId) return;
+                    var copied = payload.Segments.map(cloneNode);
+                    var insertAt = findMappingInsertionIndex(containerEl, clientX, null, clientY);
+                    Array.prototype.splice.apply(nodesArray, [insertAt, 0].concat(copied));
+                    renderSegments();
+                    markSchemasDirty(activeView);
+                }, 'rcsDragOver', onHover);
+            }
+
+            function renderSegments() {
+                renderNodeList(valueEl, mapping.Segments, fieldsByPath(), mapperConnId ? store.findConnection(mapperConnId) : null, true);
                 refreshWarning();
                 refreshExamples();
                 refreshSchemaDirtyState(activeView);
             }
 
             if (!locked) {
-                // onHover here is the generalization dragEngine.js expects:
-                // this container decides its own horizontal insertion
-                // indicator, dragEngine has no idea what "esMapValue" means.
-                // dragEngine passes the current drag's reorderElement as a
-                // third arg — that's what excludeEl needs, so a chip being
-                // reordered within its own row doesn't count against itself.
-                var onHover = function (clientX, clientY, reorderElement) {
-                    showMappingInsertionIndicator(valueEl, clientX, reorderElement, clientY);
-                };
-
-                dragEngine.registerDropTarget(valueEl, ['field'].concat(STATIC_MAPPING_DRAG_KINDS), function (rawValue, reorderElement, clientYIgnored, clientX) {
-                    var parsed = null;
-                    try { parsed = JSON.parse(rawValue); } catch (e) { /* not a field chip */ }
-
-                    var seg = (parsed && parsed.path)
-                        ? { Kind: 'Field', Value: parsed.path }
-                        : { Kind: rawValue, Value: '' };
-
-                    if (seg.Kind === 'Field' && parsed && parsed.type === 'List') {
-                        seg.Modifier = { Kind: 'ArraySlice', Start: 0, End: 0 };
-                    }
-
-                    var insertAt = findMappingInsertionIndex(valueEl, clientX, null, clientYIgnored);
-                    mapping.Segments.splice(insertAt, 0, seg);
-                    renderSegments();
-                    markSchemasDirty(activeView);
-                    if (seg.Kind === 'CustomText') {
-                        var inputs = valueEl.querySelectorAll('.esMapTextInput');
-                        if (inputs.length) inputs[Math.min(insertAt, inputs.length - 1)].focus();
-                    }
-                }, 'rcsDragOver', onHover);
-
-                dragEngine.registerDropTarget(valueEl, ['mapseg'], function (value, reorderElement, clientYIgnored, clientX) {
-                    var payload;
-                    try { payload = JSON.parse(value); } catch (e) { return; }
-                    if (!payload || !payload.Segment) return;
-                    var toIdx = findMappingInsertionIndex(
-                        valueEl,
-                        clientX,
-                        payload.SourceId === mappingDragId ? reorderElement : null,
-                        clientYIgnored
-                    );
-                    if (payload.SourceId === mappingDragId) {
-                        var moved = mapping.Segments.splice(payload.Index, 1)[0];
-                        if (!moved) return;
-                        mapping.Segments.splice(toIdx, 0, moved);
-                    } else {
-                        mapping.Segments.splice(toIdx, 0, {
-                            Kind: payload.Segment.Kind,
-                            Value: payload.Segment.Value || '',
-                            Modifier: payload.Segment.Modifier || null
-                        });
-                    }
-                    renderSegments();
-                    markSchemasDirty(activeView);
-                }, 'rcsDragOver', onHover);
-
-                dragEngine.registerDropTarget(valueEl, ['mapmapping'], function (value, reorderElement, clientY, clientX) {
-                    var payload;
-                    try { payload = JSON.parse(value); } catch (e) { return; }
-                    if (!payload || !Array.isArray(payload.Segments) || payload.SourceId === mappingDragId) return;
-                    var copiedSegments = payload.Segments.map(function (seg) {
-                        return { Kind: seg.Kind, Value: seg.Value || '', Modifier: seg.Modifier || null };
-                    });
-                    var insertAt = findMappingInsertionIndex(valueEl, clientX, null, clientY);
-                    Array.prototype.splice.apply(mapping.Segments, [insertAt, 0].concat(copiedSegments));
-                    renderSegments();
-                    markSchemasDirty(activeView);
-                }, 'rcsDragOver', onHover);
-
                 dragEngine.registerDropTarget(mappingHandle, ['mapmapping'], function (value) {
                     var payload;
                     try { payload = JSON.parse(value); } catch (e) { return; }
                     if (!payload || !Array.isArray(payload.Segments) || payload.SourceId === mappingDragId) return;
-                    mapping.Segments = payload.Segments.map(function (seg) {
-                        return { Kind: seg.Kind, Value: seg.Value || '', Modifier: seg.Modifier || null };
-                    });
+                    mapping.Segments = payload.Segments.map(cloneNode);
                     renderSegments();
                     markSchemasDirty(activeView);
                 });
@@ -774,6 +1001,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             staticChipsWrap.id = 'esStaticPaletteChips';
             paletteFlow.appendChild(staticChipsWrap);
             renderStaticMappingChips(staticChipsWrap, store.findConnection(schema.ConnectionId));
+
+            var functionChipsWrap = document.createElement('div');
+            functionChipsWrap.id = 'esFunctionPaletteChips';
+            paletteFlow.appendChild(functionChipsWrap);
+            renderFunctionPaletteChips(functionChipsWrap);
 
             var chipsWrap = document.createElement('div');
             chipsWrap.id = 'esPaletteChips';
@@ -1014,13 +1246,15 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             wrap.appendChild(label);
 
             // Only keys this plugin has zero-guessing certainty about: its
-            // own compiled IExternalId classes. Deliberately NOT reserving
-            // Tmdb/Imdb/Tvdb/etc — that would require knowing Emby's full
-            // native IExternalId roster, which isn't confirmed. An admin
-            // naming a custom field "Tmdb" and enabling our badge for it
-            // just produces a harmless duplicate badge alongside Emby's own —
-            // an acceptable, fail-safe edge case rather than a guess dressed
-            // up as a rule.
+            // own compiled IExternalId classes (RadarrExternalId,
+            // SonarrExternalId). Deliberately NOT reserving Tmdb/Imdb/Tvdb or
+            // any other Emby-native key — that would require confirmed
+            // knowledge of Emby's full built-in IExternalId roster, which
+            // isn't available here. An admin naming a custom field "Tmdb"
+            // and enabling our badge for it just produces a harmless
+            // duplicate badge alongside Emby's own native one — an
+            // acceptable, fail-safe edge case rather than a guess dressed up
+            // as a rule.
             var RESERVED_BADGE_KEYS = ['radarrid', 'sonarrid'];
             var BADGE_SLOT_COUNT = 5;
 
@@ -1050,10 +1284,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 var nameRow = document.createElement('div');
                 nameRow.className = 'esProviderIdKeyRow';
 
-                var nameLabel = document.createElement('span');
-                nameLabel.className = 'esProviderIdRowLabel';
-                nameLabel.innerText = 'Name';
-                nameRow.appendChild(nameLabel);
+                var nameRowLabel = document.createElement('span');
+                nameRowLabel.className = 'esProviderIdRowLabel';
+                nameRowLabel.innerText = 'Name';
+                nameRow.appendChild(nameRowLabel);
 
                 var keyInput = document.createElement('input');
                 keyInput.type = 'text';
@@ -1133,10 +1367,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 var urlRow = document.createElement('div');
                 urlRow.className = 'esProviderIdUrlRow';
 
-                var urlLabel = document.createElement('span');
-                urlLabel.className = 'esProviderIdRowLabel';
-                urlLabel.innerText = 'URL format';
-                urlRow.appendChild(urlLabel);
+                var urlRowLabel = document.createElement('span');
+                urlRowLabel.className = 'esProviderIdRowLabel';
+                urlRowLabel.innerText = 'URL format';
+                urlRow.appendChild(urlRowLabel);
 
                 var urlFormatInput = document.createElement('input');
                 urlFormatInput.type = 'text';
@@ -1183,9 +1417,18 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             return wrap;
         }
 
+        // The key input's 'change' handler fires mid focus-transition (the
+        // blur that precedes Tab moving focus onward) and rebuilds the whole
+        // form, destroying the element Tab was about to land on. Since the
+        // browser can't complete a transition into a DOM node that no longer
+        // exists, focus falls back to <body> and the next Tab press starts
+        // over from the top of the page. Re-focusing the newly-rebuilt value
+        // input here restores the Tab-to-value flow the UI is supposed to have.
         function focusValueInputAfterKeyRename(view, newKey) {
-            var keys = Object.keys((store.get('schemas').filter(function (s) { return s.Id === view.querySelector('#esSchemaSelect').value; })[0] || {}).StaticQueryParams || {});
-            var idx = keys.indexOf(newKey);
+            var schemaId = view.querySelector('#esSchemaSelect').value;
+            var schema = store.get('schemas').filter(function (s) { return s.Id === schemaId; })[0];
+            if (!schema || !schema.StaticQueryParams) return;
+            var idx = Object.keys(schema.StaticQueryParams).indexOf(newKey);
             if (idx < 0) return;
             var rows = view.querySelectorAll('#esStaticQueryParamsWrap > div');
             var row = rows[idx];
@@ -1796,6 +2039,37 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             return true;
         }
 
+        // Generic walk that finds every MappingNode across every schema by
+        // duck-typing on {Segments:[...]} / {Children:[...]} shape rather
+        // than hardcoding property names — stays correct if fields get
+        // added/renamed on EndpointSchema later without needing a matching
+        // update here. Returns every invalid Function node found (currently
+        // only ArraySlice wrapping something other than a single list-typed
+        // Field — see functionNodeValidity). CachedType is only populated
+        // for Field nodes that have actually been rendered this session
+        // (see renderNode), so a schema whose mapping tab was never opened
+        // this session won't have it and fails open (assumed valid) rather
+        // than blocking on information this client doesn't have.
+        function collectInvalidFunctionNodes(schemas) {
+            var invalid = [];
+            function walkNodes(nodes) {
+                (nodes || []).forEach(function (node) {
+                    if (node && node.Kind === 'Function') {
+                        if (!functionNodeValidity(node)) invalid.push(node);
+                        walkNodes(node.Children);
+                    }
+                });
+            }
+            function walkValue(v) {
+                if (!v || typeof v !== 'object') return;
+                if (Array.isArray(v)) { v.forEach(walkValue); return; }
+                if (Array.isArray(v.Segments)) { walkNodes(v.Segments); return; }
+                Object.keys(v).forEach(function (k) { walkValue(v[k]); });
+            }
+            (schemas || []).forEach(walkValue);
+            return invalid;
+        }
+
         function saveEndpointSchemas(view) {
             var status = view.querySelector('#esSaveStatus');
             var affectedFolders = 0;
@@ -1803,6 +2077,19 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 status.innerText = 'Save cancelled.';
                 return;
             }
+
+            var invalidFunctionNodes = collectInvalidFunctionNodes(store.get('schemas'));
+            if (invalidFunctionNodes.length > 0) {
+                var invalidChip = view.querySelector('.esMapSeg-function[data-map-node-valid="0"]');
+                if (invalidChip) invalidChip.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                Dashboard.alert(
+                    invalidFunctionNodes.length + ' Array function(s) are outlined in red because they aren\'t ' +
+                    'wrapping a single list-type field — fix or remove them before saving.'
+                );
+                status.innerText = 'Save cancelled.';
+                return;
+            }
+
             var selectedConnectionId = view.querySelector('#esConnectionSelect').value;
             var selectedSchemaId = store.get('currentSchemaId');
             var ruleSetsFile = store.get('ruleSetsFile');

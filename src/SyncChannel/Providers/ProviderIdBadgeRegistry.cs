@@ -1,13 +1,12 @@
-﻿// Backs the fixed pool of 5 GenericProviderIdExternalId slot classes.
+// Backs the fixed pool of 5 GenericProviderIdExternalId slot classes.
 // Emby composes its IExternalId list once at startup by scanning the
 // assembly — it never re-reads config at request time — so these slot
 // classes can't take constructor-injected dependencies the way
 // EndpointSchemaStore does (Emby instantiates them with no DI, same as
-// RadarrExternalId/SonarrExternalId/GenericExternalId already do). This
-// static registry is the bridge: EndpointSchemaStore (which IS
-// DI-constructed and already runs on every Load/Save) keeps it refreshed,
-// and each slot class just asks it "which key, if any, am I bound to right
-// now" at call time.
+// RadarrExternalId/SonarrExternalId already do). This static registry is
+// the bridge: EndpointSchemaStore (which IS DI-constructed and already
+// runs on every Load/Save) keeps it refreshed, and each slot class just
+// asks it "which key, if any, am I bound to right now" at call time.
 //
 // No slot binding is persisted anywhere. Slot N is always just "the Nth
 // entry, alphabetically, of every currently-enabled non-reserved provider-id
@@ -30,22 +29,27 @@ namespace SyncChannel.Providers
         private static readonly object SyncRoot = new object();
         private static string[] enabledKeys = Array.Empty<string>();
 
-        // Keys with their own dedicated handling already — Tmdb/Imdb/Tvdb
-        // are natively recognised by Emby's own badges, RadarrId/SonarrId
-        // have their own compiled IExternalId classes, SourceUrl is
-        // GenericExternalId's fixed click-through badge. None of these
-        // should ever be allowed to also consume one of the 5 generic slots.
-        private static readonly HashSet<string> ReservedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "tmdbId", "imdbId", "tvdbId", "RadarrId", "SonarrId", "SourceUrl"
-        };
-
         // Keyed by provider-id key (same casing rules as enabledKeys). Only
         // populated for keys that have an explicit non-blank template set on
         // SOME schema — first non-blank one found wins if the same key name
         // is reused with different templates across schemas, which would be
         // an odd admin setup but shouldn't throw.
         private static Dictionary<string, string> urlFormatsByKey = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Only keys this plugin has zero-guessing certainty about: its own
+        // compiled IExternalId classes (RadarrExternalId, SonarrExternalId).
+        // Deliberately does NOT reserve Tmdb/Imdb/Tvdb or any other
+        // Emby-native key — that would require confirmed knowledge of
+        // Emby's full built-in IExternalId roster, which this plugin
+        // doesn't have. An admin naming a custom field "Tmdb" and enabling
+        // our badge for it just produces a harmless duplicate badge
+        // alongside Emby's own native one — an acceptable, fail-safe edge
+        // case rather than a guess dressed up as a rule. See the matching
+        // client-side list in schemaEditorTab.js.
+        private static readonly HashSet<string> ReservedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "RadarrId", "SonarrId"
+        };
 
         public static void Refresh(IEnumerable<EndpointSchema> schemas)
         {

@@ -7,7 +7,7 @@
 // IFetchProvider classes — HttpFetchProvider is generic against any schema.
 //
 // Every output field (Identity, Title, Poster, ProviderIds, etc.) is a
-// FieldMapping — an ordered list of MappingSegments built from JSON fields,
+// FieldMapping — an ordered tree of MappingNodes built from JSON fields,
 // literal text, or connection facts (base URL, api key name/value, the
 // item's own already-resolved identity). This replaced a previous design
 // where each field was a single plain dotted JsonPath string, plus two
@@ -119,19 +119,19 @@ namespace SyncChannel.Configuration
         public List<string> Examples { get; set; } = new List<string>();
     }
 
-    // One piece of a FieldMapping. A mapping is an ordered concatenation of
-    // these — e.g. [CustomText "{baseUrl}/Items/", Field "id", CustomText
-    // "/Images/Primary?tag=", Field "imageTags.primary", CustomText
-    // "&api_key=", ApiKeyValue] resolves to a single URL string per item.
-    public enum MappingSegmentKind
+    // One node of a FieldMapping's tree. A mapping is an ordered
+    // concatenation of top-level nodes — e.g. [CustomText "{baseUrl}/Items/",
+    // Field "id", CustomText "/Images/Primary?tag=", Field "imageTags.primary",
+    // CustomText "&api_key=", ApiKeyValue] resolves to a single URL string
+    // per item. Kind=Function is a container node instead of a leaf: it
+    // wraps one or more Children and applies a string/array operation to
+    // their concatenated resolved output, which is what lets combinations
+    // like Left[2][dateField] + "--" + Right[4][otherField] nest and sit
+    // side-by-side within one mapping.
+    public enum MappingNodeKind
     {
         // Value holds a dotted JsonPath, resolved per-item the same way
-        // SchemaField.JsonPath is (via RuleEvaluator.ResolveDisplayValue),
-        // with one addition: if the raw value at that path is an array of
-        // {coverType, remoteUrl} objects (the Radarr/Sonarr images[] shape),
-        // the "poster" entry's remoteUrl is used instead of a generic join —
-        // same special case the old ResolvePoster helper handled, now
-        // available to any field, in any mapping, not just PosterUrlField.
+        // SchemaField.JsonPath is (via RuleEvaluator.ResolveDisplayValue).
         Field,
 
         // Value is the literal text, used as-is, e.g. "?tag=" or "&".
@@ -153,39 +153,38 @@ namespace SyncChannel.Configuration
         // than IdentityField itself (a self-reference inside IdentityField
         // resolves to empty, since identity hasn't been produced yet when
         // IdentityField is the mapping being resolved).
-        Identity
+        Identity,
+
+        // Container node — see FunctionKind and Children below. Value/Start/
+        // End on a Function node are interpreted per FunctionKind; Value is
+        // unused.
+        Function
     }
 
-    public enum SegmentModifierKind { None, Left, Right, Substring, ArraySlice }
+    public enum FunctionKind { Left, Right, Substring, ArraySlice }
 
-    // Attached only to Kind=Field segments in the schema mapper — not
-    // offered on rule-builder conditions, which match the raw JSON value
-    // directly. Left/Right/Substring operate on the segment's final
-    // resolved string. ArraySlice operates on the raw list of values BEFORE
-    // the generic comma-join, so it can select a subset instead of always
-    // getting everything.
-    public class SegmentModifier
+    public class MappingNode
     {
-        public SegmentModifierKind Kind { get; set; } = SegmentModifierKind.None;
+        public MappingNodeKind Kind { get; set; } = MappingNodeKind.CustomText;
 
-        // Left/Right: character count (Start only). Substring/ArraySlice:
-        // inclusive Start/End indices. End = -1 on ArraySlice means "all".
-        public int Start { get; set; }
-        public int End { get; set; } = -1;
-    }
-
-    public class MappingSegment
-    {
-        public MappingSegmentKind Kind { get; set; } = MappingSegmentKind.CustomText;
-
-        // Meaningful only for Kind=Field (dotted JsonPath) and
-        // Kind=CustomText (literal text). Ignored for the other three kinds.
+        // Field path (Kind=Field) or literal text (Kind=CustomText). Unused
+        // for every other kind, including Function.
         public string Value { get; set; } = string.Empty;
 
-        // Field-segment-only string/array modifier — see SegmentModifier.
-        // Null is the common case (every mapping segment before this
-        // existed, and most since) — no data-shape migration needed.
-        public SegmentModifier Modifier { get; set; }
+        // Only meaningful for Kind=Function.
+        public FunctionKind Function { get; set; }
+
+        // Left/Right: character count (Start only, End ignored).
+        // Substring/ArraySlice: inclusive start/end. ArraySlice End=-1
+        // means "all".
+        public int Start { get; set; }
+        public int End { get; set; } = -1;
+
+        // Only populated for Kind=Function — the node(s) this function
+        // wraps. A Function with one child is the common case (e.g. Left[4]
+        // wrapping a single date field); more than one child means the
+        // function applies to their concatenated resolved text.
+        public List<MappingNode> Children { get; set; } = new List<MappingNode>();
     }
 
     // An orderable, admin-built recipe for one output field. Empty
@@ -193,7 +192,7 @@ namespace SyncChannel.Configuration
     // left unmapped and resolves to blank/null.
     public class FieldMapping
     {
-        public List<MappingSegment> Segments { get; set; } = new List<MappingSegment>();
+        public List<MappingNode> Segments { get; set; } = new List<MappingNode>();
     }
 
     public class EndpointSchema
@@ -257,7 +256,7 @@ namespace SyncChannel.Configuration
 
         // Every field below is a FieldMapping: an ordered recipe built from
         // JSON fields, literal text, and connection facts (see
-        // MappingSegmentKind). IdentityField is the only one that MUST
+        // MappingNodeKind). IdentityField is the only one that MUST
         // resolve non-empty — same "no stable id, drop the item" discipline
         // as before.
         public FieldMapping IdentityField { get; set; } = new FieldMapping();
@@ -324,8 +323,6 @@ namespace SyncChannel.Configuration
         // Radarr/Sonarr's own host:port), build the full URL into the field
         // mapping instead and leave this blank.
         public Dictionary<string, string> ProviderIdBadgeUrlFormats { get; set; } = new Dictionary<string, string>();
-
-        
 
         // The fields available in the rule builder's FILTER palette for
         // this schema. Unrelated to the output FieldMappings above — see

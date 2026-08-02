@@ -238,12 +238,12 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var currentRuleSetIndex = store.get('currentRuleSetIndex');
             var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
 
-            // currentRuleSetIndex < 0 is a legitimate state after deleting the
-            // last rule set for this schema — there's nothing to validate or
-            // capture from the canvas, just a pending deletion already sitting
-            // in ruleSetsFile that still needs to reach the server. Only bail
-            // out here when a rule set IS supposed to be selected but its DOM
-            // is unexpectedly missing.
+            // currentRuleSetIndex < 0 is a legitimate state after deleting
+            // the last rule set for this schema — there's nothing to
+            // validate or capture from the canvas, just a pending deletion
+            // already sitting in ruleSetsFile that still needs to reach the
+            // server. Only bail out here when a rule set IS supposed to be
+            // selected but its DOM is unexpectedly missing.
             if (currentRuleSetIndex >= 0 && !rootGroupEl) {
                 Dashboard.alert('No rule set is selected to save. Create one with "+ New" first.');
                 return;

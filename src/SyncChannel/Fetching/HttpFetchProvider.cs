@@ -109,8 +109,8 @@ namespace SyncChannel.Fetching
                         }
 
                         // Identity resolves first — every other mapping may
-                        // reference it via a MappingSegmentKind.Identity
-                        // segment. A self-reference inside IdentityField's
+                        // reference it via a MappingNodeKind.Identity
+                        // node. A self-reference inside IdentityField's
                         // own mapping is passed identity: null, so it just
                         // resolves blank there (harmless, not circular).
                         var identity = ResolveMapping(el, schema.IdentityField, connection, null);
@@ -200,31 +200,35 @@ namespace SyncChannel.Fetching
             if (mapping?.Segments == null || mapping.Segments.Count == 0) return string.Empty;
 
             var sb = new System.Text.StringBuilder();
-            foreach (var seg in mapping.Segments)
+            foreach (var node in mapping.Segments)
             {
-                sb.Append(ResolveSegment(el, seg, connection, identity));
+                sb.Append(ResolveNode(el, node, connection, identity));
             }
             return sb.ToString();
         }
 
         /// <summary>
         /// Same as <see cref="ResolveMapping"/>, but returns null if the
-        /// mapping is empty OR any Field segment inside it resolved to an
-        /// empty string — mirrors the old ApplyUrlTemplate "a template
+        /// mapping is empty OR any top-level Field node inside it resolved
+        /// to an empty string — mirrors the old ApplyUrlTemplate "a template
         /// needs {value} to be meaningful" rule (see Evidence.md: once a
         /// blank/broken URL is applied as a Primary image via
         /// ChannelItemInfo.ImageUrl, ChannelManager never replaces it
-        /// later, so this must never happen in the first place).
+        /// later, so this must never happen in the first place). Only
+        /// top-level Field nodes are checked, same as before this became a
+        /// tree — a Field wrapped inside a Function is not checked here,
+        /// since a wrapping function (e.g. Left[4]) may legitimately turn a
+        /// non-blank field into a blank result on purpose.
         /// </summary>
         private static string ResolveMappingOrNullIfAnyFieldBlank(JsonElement el, FieldMapping mapping, ConnectionEntry connection, string identity)
         {
             if (mapping?.Segments == null || mapping.Segments.Count == 0) return null;
 
             var sb = new System.Text.StringBuilder();
-            foreach (var seg in mapping.Segments)
+            foreach (var node in mapping.Segments)
             {
-                var resolved = ResolveSegment(el, seg, connection, identity);
-                if (seg.Kind == MappingSegmentKind.Field && string.IsNullOrEmpty(resolved))
+                var resolved = ResolveNode(el, node, connection, identity);
+                if (node.Kind == MappingNodeKind.Field && string.IsNullOrEmpty(resolved))
                 {
                     return null;
                 }
@@ -233,67 +237,94 @@ namespace SyncChannel.Fetching
             return sb.ToString();
         }
 
-        private static string ResolveSegment(JsonElement el, MappingSegment seg, ConnectionEntry connection, string identity)
+        // Recursively resolves a mapping's node tree against one JSON item.
+        // Leaf nodes (Field/CustomText/etc) resolve directly, same rules as
+        // before this became a tree. A Function node resolves its Children
+        // (concatenating if there's more than one), then applies its own
+        // operation to that result — EXCEPT ArraySlice, which needs the raw
+        // list of values rather than an already-joined string, so it
+        // special-cases the single-Field-child shape and reads the list
+        // directly via RuleEvaluator.ResolveDisplayValues.
+        private static string ResolveNode(JsonElement el, MappingNode node, ConnectionEntry connection, string identity)
         {
-            switch (seg.Kind)
+            switch (node.Kind)
             {
-                case MappingSegmentKind.Field:
-                    return ResolveFieldSegmentValue(el, seg.Value);
-                case MappingSegmentKind.CustomText:
-                    return seg.Value ?? string.Empty;
-                case MappingSegmentKind.ApiKeyName:
+                case MappingNodeKind.Field:
+                    return RuleEvaluator.ResolveDisplayValue(el, node.Value) ?? string.Empty;
+                case MappingNodeKind.CustomText:
+                    return node.Value ?? string.Empty;
+                case MappingNodeKind.ApiKeyName:
                     return connection == null ? string.Empty : (string.IsNullOrWhiteSpace(connection.ApiKeyParamName) ? "apikey" : connection.ApiKeyParamName);
-                case MappingSegmentKind.ApiKeyValue:
+                case MappingNodeKind.ApiKeyValue:
                     return connection?.ApiKey ?? string.Empty;
-                case MappingSegmentKind.BaseUrl:
+                case MappingNodeKind.BaseUrl:
                     return connection == null ? string.Empty : connection.BaseUrl.TrimEnd('/');
-                case MappingSegmentKind.Identity:
+                case MappingNodeKind.Identity:
                     return identity ?? string.Empty;
+                case MappingNodeKind.Function:
+                    return ResolveFunction(el, node, connection, identity);
                 default:
                     return string.Empty;
             }
         }
 
-        // Resolves one JSON field for use inside a mapping. Prefers the
-        // *arr-family images[] -> {coverType:"poster", remoteUrl} special
-        // case (moved here, unchanged in behavior, from the old
-        // ResolvePoster helper) so ANY field in ANY mapping gets that
-        // shape recognized, not just a dedicated PosterUrlField as before.
-        // Falls back to RuleEvaluator.ResolveDisplayValue for every other
-        // shape — same path grammar the rule builder's conditions use.
-        private static string ResolveFieldSegmentValue(JsonElement el, string path)
+        private static string ResolveFunction(JsonElement el, MappingNode node, ConnectionEntry connection, string identity)
         {
-            if (string.IsNullOrEmpty(path)) return string.Empty;
+            if (node.Function == FunctionKind.ArraySlice)
+            {
+                // Only meaningful against a single Field child pointing at
+                // an array-shaped path — the schema editor's validity check
+                // is what keeps a schema from being saved in any other
+                // shape wrapped in ArraySlice, so this is a defensive
+                // fallback, not the primary guard.
+                if (node.Children.Count == 1 && node.Children[0].Kind == MappingNodeKind.Field)
+                {
+                    var values = RuleEvaluator.ResolveDisplayValues(el, node.Children[0].Value);
+                    if (values.Count > 0) return ApplyArraySlice(values, node);
+                }
+                return string.Empty;
+            }
 
-            var imageArrayMatch = TryResolveImageArrayShape(el, path);
-            if (imageArrayMatch != null) return imageArrayMatch;
-
-            return RuleEvaluator.ResolveDisplayValue(el, path) ?? string.Empty;
+            var joined = string.Concat(node.Children.ConvertAll(c => ResolveNode(el, c, connection, identity)));
+            return ApplyStringFunction(joined, node);
         }
 
-        // Radarr/Sonarr both express posters as images[].coverType == "poster" -> remoteUrl.
-        // Kept as a small special case (same shape both built-in schemas share)
-        // rather than a fully generic "nested array lookup" schema field —
-        // a field that isn't shaped like this just falls through to the
-        // generic resolver above.
-        private static string TryResolveImageArrayShape(JsonElement el, string path)
+        private static string ApplyArraySlice(List<string> values, MappingNode node)
         {
-            if (!el.TryGetProperty(path, out var valueEl) || valueEl.ValueKind != JsonValueKind.Array)
-            {
-                return null;
-            }
+            if (node.End < 0) return string.Join(", ", values); // "all"
+            int start = Math.Max(0, Math.Min(node.Start, values.Count - 1));
+            int end = Math.Max(start, Math.Min(node.End, values.Count - 1));
+            var slice = new List<string>();
+            for (int i = start; i <= end; i++) slice.Add(values[i]);
+            return string.Join(", ", slice);
+        }
 
-            foreach (var img in valueEl.EnumerateArray())
-            {
-                if (img.TryGetProperty("coverType", out var coverType) &&
-                    string.Equals(coverType.GetString(), "poster", StringComparison.OrdinalIgnoreCase) &&
-                    img.TryGetProperty("remoteUrl", out var remoteUrl))
-                {
-                    return remoteUrl.GetString();
-                }
-            }
+        private static string ApplyStringFunction(string value, MappingNode node)
+        {
+            if (string.IsNullOrEmpty(value)) return value ?? string.Empty;
 
-            return null;
+            switch (node.Function)
+            {
+                case FunctionKind.Left:
+                    {
+                        int n = Math.Max(0, Math.Min(node.Start, value.Length));
+                        return value.Substring(0, n);
+                    }
+                case FunctionKind.Right:
+                    {
+                        int n = Math.Max(0, Math.Min(node.Start, value.Length));
+                        return value.Substring(value.Length - n);
+                    }
+                case FunctionKind.Substring:
+                    {
+                        int start = Math.Max(0, Math.Min(node.Start, value.Length));
+                        int end = Math.Max(start, Math.Min(node.End, value.Length - 1));
+                        int len = value.Length == 0 ? 0 : (end - start + 1);
+                        return len <= 0 ? string.Empty : value.Substring(start, len);
+                    }
+                default:
+                    return value;
+            }
         }
 
         private static int? ParseYear(string s)

@@ -224,22 +224,6 @@ namespace SyncChannel.Configuration
                         break;
 
                     case JsonValueKind.Object:
-                        // Radarr/Sonarr images[] is an array of
-                        // {coverType, remoteUrl} objects. The mapper resolves
-                        // the parent "images" path to the poster remoteUrl,
-                        // so discovery must expose that same usable value
-                        // (with examples), not only images.coverType and
-                        // images.remoteUrl as generic List fields.
-                        if (TryGetPropertyIgnoreCase(item, "coverType", out var coverType) &&
-                            TryGetPropertyIgnoreCase(item, "remoteUrl", out var remoteUrl) &&
-                            coverType.ValueKind == JsonValueKind.String &&
-                            remoteUrl.ValueKind == JsonValueKind.String &&
-                            string.Equals(coverType.GetString(), "poster", StringComparison.OrdinalIgnoreCase))
-                        {
-                            Merge(typeByPath, orderByPath, path, SchemaFieldType.String);
-                            AddExample(examplesByPath, path, remoteUrl.GetString());
-                        }
-
                         // Collapse: one level of scalar sub-fields off each
                         // array-of-objects entry becomes its own List-typed
                         // field at "arrayName.subfield" — the same shape as

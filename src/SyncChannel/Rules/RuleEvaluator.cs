@@ -1,6 +1,7 @@
 ﻿namespace SyncChannel.Rules
 {
     using System;
+    using System.Collections.Generic;
     using System.Globalization;
     using System.Linq;
     using System.Text.Json;
@@ -148,36 +149,47 @@
 
         // Resolves a dotted field path to a human-readable display string
         // for a given movie — used by the preview table (not by matching
-        // itself). Reuses the same TryResolve/ScalarToString machinery as
-        // Compare() above so display values stay consistent with what
-        // matching actually evaluated against.
+        // itself). Just joins whatever ResolveDisplayValues below returns —
+        // kept as its own method since most callers want the joined string,
+        // not the raw list.
         public static string ResolveDisplayValue(JsonElement movie, string field)
         {
+            return string.Join(", ", ResolveDisplayValues(movie, field));
+        }
+
+        // Same resolution as ResolveDisplayValue, but returns the raw list
+        // of per-element strings instead of a pre-joined string — needed by
+        // MappingNode's ArraySlice function, which picks a subset of
+        // elements before any joining happens. A non-array field still
+        // returns a single-element list, so callers don't need two separate
+        // code paths for scalar vs. array fields.
+        public static List<string> ResolveDisplayValues(JsonElement movie, string field)
+        {
             var segments = (field ?? string.Empty).Split('.');
-            if (segments.Length == 0 || segments[0].Length == 0) return string.Empty;
+            if (segments.Length == 0 || segments[0].Length == 0) return new List<string>();
 
             if (!TryResolve(movie, segments, 0, out var resolved, out var remaining))
-                return string.Empty;
+                return new List<string>();
 
             if (resolved.ValueKind == JsonValueKind.Array)
             {
                 if (remaining.Length > 0)
                 {
-                    var projected = resolved.EnumerateArray()
+                    return resolved.EnumerateArray()
                         .Select(item =>
                         {
                             if (TryResolve(item, remaining, 0, out var sub, out var subRemaining) && subRemaining.Length == 0)
                                 return ScalarToString(sub);
                             return null;
                         })
-                        .Where(v => v != null);
-                    return string.Join(", ", projected);
+                        .Where(v => v != null)
+                        .ToList();
                 }
 
-                return string.Join(", ", resolved.EnumerateArray().Select(ScalarToString));
+                return resolved.EnumerateArray().Select(ScalarToString).ToList();
             }
 
-            return ScalarToString(resolved);
+            return new List<string> { ScalarToString(resolved) };
         }
 
         private static string ScalarToString(JsonElement el) =>

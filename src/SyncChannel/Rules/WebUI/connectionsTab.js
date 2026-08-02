@@ -19,6 +19,29 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         var tracker = dirtyTracker.createTracker(editableConnectionsJson);
 
+        function editableConnectionsJson(items) {
+            return JSON.stringify((items || []).map(function (connection) {
+                return {
+                    Id: connection.Id,
+                    DisplayLabel: connection.DisplayLabel,
+                    DisplayLabelIsUserEntered: !!connection.DisplayLabelIsUserEntered,
+                    BaseUrl: connection.BaseUrl,
+                    BaseUrlIsUserEntered: !!connection.BaseUrlIsUserEntered,
+                    ApiKey: connection.ApiKey,
+                    SystemType: connection.SystemType,
+                    ApiKeyParamName: connection.ApiKeyParamName
+                };
+            }));
+        }
+
+        // Mirrors the "suggest, don't force" pattern already used for
+        // BaseUrl/ApiKeyParamName (BaseUrlIsUserEntered): only auto-fills the
+        // label while the operator hasn't typed their own, and re-suggests
+        // when the System changes. Counts existing connections whose label
+        // still looks auto-generated for that app root, not just SystemType,
+        // so a connection someone deliberately renamed doesn't get counted
+        // against the numbering (e.g. "My radar connection" doesn't stop a
+        // fresh Radarr connection from still suggesting "Radarr", not "Radarr2").
         function computeDefaultDisplayLabel(app, connections, excludeId) {
             var root = app.label.replace(/\s*\(built-in\)\s*/i, '').trim() || app.key;
             var pattern = new RegExp('^' + root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d*)$', 'i');
@@ -34,23 +57,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             });
             if (!rootTaken && highest === 0) return root;
             return root + Math.max(2, highest + 1);
-        }
-
-
-
-        function editableConnectionsJson(items) {
-            return JSON.stringify((items || []).map(function (connection) {
-                return {
-                    Id: connection.Id,
-                    DisplayLabel: connection.DisplayLabel,
-                    BaseUrl: connection.BaseUrl,
-                    BaseUrlIsUserEntered: !!connection.BaseUrlIsUserEntered,
-                    DisplayLabelIsUserEntered: !!connection.DisplayLabelIsUserEntered,
-                    ApiKey: connection.ApiKey,
-                    SystemType: connection.SystemType,
-                    ApiKeyParamName: connection.ApiKeyParamName
-                };
-            }));
         }
 
         function snapshotSaved() {
