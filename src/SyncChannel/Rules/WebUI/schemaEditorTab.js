@@ -8,6 +8,54 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
     function ($, store, dragEngine, fieldDiscovery, helpers, ruleBuilderTab, connectionsTab, ruleSetManagerTab) {
         'use strict';
 
+        // Shared floating preview panel used when hovering a Function node's
+        // badge (e.g. "Array") to show a few resolved examples — same idea
+        // as the root-level esMapExamples row, but that one is laid out
+        // inline as part of the mapping row's flexbox and can't be reused
+        // for a node buried inside nested chips, so this is a single
+        // position:fixed panel appended once and repositioned per-hover.
+        var floatingExamplesPanel = null;
+        function ensureFloatingExamplesPanel() {
+            if (!floatingExamplesPanel) {
+                floatingExamplesPanel = document.createElement('div');
+                floatingExamplesPanel.className = 'esMapExamples esMapFloatingExamples';
+                document.body.appendChild(floatingExamplesPanel);
+            }
+            return floatingExamplesPanel;
+        }
+        function showFloatingExamples(anchorEl, examples, roleHint) {
+            var panel = ensureFloatingExamplesPanel();
+            panel.innerHTML = '';
+            (examples || []).forEach(function (example) {
+                var looksLikeImage = /^https?:\/\/\S+$/i.test(example) &&
+                    (/\.(jpe?g|png|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(example) || /image|poster|thumb|art/i.test(roleHint || ''));
+                if (looksLikeImage) {
+                    var img = document.createElement('img');
+                    img.className = 'esMapExampleImage';
+                    img.src = example;
+                    img.alt = example;
+                    img.title = example;
+                    img.addEventListener('error', function () {
+                        if (img.parentNode) img.parentNode.removeChild(img);
+                    });
+                    panel.appendChild(img);
+                } else {
+                    var span = document.createElement('span');
+                    span.className = 'esMapExample';
+                    span.innerText = example;
+                    panel.appendChild(span);
+                }
+            });
+            if (!panel.children.length) { panel.style.display = 'none'; return; }
+            var rect = anchorEl.getBoundingClientRect();
+            panel.style.display = 'flex';
+            panel.style.left = Math.max(4, rect.left) + 'px';
+            panel.style.top = (rect.bottom + 6) + 'px';
+        }
+        function hideFloatingExamples() {
+            if (floatingExamplesPanel) floatingExamplesPanel.style.display = 'none';
+        }
+
         var OBJECT_KINDS = [
             { value: 'FlatMedia', label: 'Flat Media (single playable item, e.g. Movie)' },
             { value: 'Series', label: 'Series (Series -> Season -> Episode)' },
@@ -548,6 +596,22 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 return output.slice(0, 3);
             }
 
+            // Same idea as resolvedExamples() above, but scoped to a single
+            // node rather than the whole mapping — used for the hover
+            // preview on a Function chip's own badge (e.g. Array), so
+            // hovering "Array[0]" shows what that slice actually resolves
+            // to, not the whole field's mapping.
+            function nodeResolvedExamples(node) {
+                var fbp = fieldsByPath();
+                var connection = mapperConnId ? store.findConnection(mapperConnId) : null;
+                var output = [];
+                for (var exampleIndex = 0; exampleIndex < 3; exampleIndex++) {
+                    var r = previewResolveNode(node, fbp, connection, exampleIndex);
+                    if (r.text && output.indexOf(r.text) === -1) output.push(r.text);
+                }
+                return output.slice(0, 3);
+            }
+
             function refreshExamples() {
                 examplesEl.innerHTML = '';
                 var examples = resolvedExamples();
@@ -719,6 +783,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 badge.title = valid
                     ? 'Function applied to whatever is inside the brackets.'
                     : 'Array only works wrapping a single list-type field — this won\'t resolve to anything as configured. Saving is blocked until this is fixed.';
+                badge.addEventListener('mouseenter', function () {
+                    showFloatingExamples(badge, nodeResolvedExamples(node), warnRoleKey || labelText);
+                });
+                badge.addEventListener('mouseleave', hideFloatingExamples);
                 wrap.appendChild(badge);
 
                 var paramInput = document.createElement('input');
