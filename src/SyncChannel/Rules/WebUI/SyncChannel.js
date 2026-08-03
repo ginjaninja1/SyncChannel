@@ -6,11 +6,36 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
     function ($, store, connectionsTab, schemaEditorTab, ruleSetManagerTab, folderTreeTab) {
         'use strict';
 
+        // Every tab keeps its own edits live in the shared store as you
+        // type, saved independently per tab (see each tab's own Save
+        // button) — there's no cross-tab draft/undo, so switching tabs out
+        // from under an unsaved edit would silently strand it or, worse,
+        // get scooped up by whatever the next tab's Save button submits.
+        // Simplest robust fix: block the switch outright until the current
+        // tab's changes are saved or discarded, matching the same rule
+        // already enforced within the Schema tab's own dropdowns.
+        function unsavedChangesTabName() {
+            if (connectionsTab.hasUnsavedChanges()) return 'Connections';
+            if (schemaEditorTab.hasUnsavedChanges()) return 'Endpoint Schemas';
+            if (ruleSetManagerTab.hasUnsavedChanges()) return 'Rule Sets';
+            if (folderTreeTab.hasUnsavedChanges()) return 'Folder Tree';
+            return null;
+        }
+
         function wireTabs(view) {
             var buttons = view.querySelectorAll('.emby-tab-button');
             buttons.forEach(function (btn) {
                 btn.addEventListener('click', function (e) {
                     e.preventDefault();
+
+                    if (!btn.classList.contains('emby-tab-button-active')) {
+                        var blockingTab = unsavedChangesTabName();
+                        if (blockingTab) {
+                            alert('Save or discard your changes on the "' + blockingTab + '" tab before switching tabs.');
+                            return;
+                        }
+                    }
+
                     buttons.forEach(function (b) { b.classList.remove('emby-tab-button-active'); });
                     btn.classList.add('emby-tab-button-active');
 

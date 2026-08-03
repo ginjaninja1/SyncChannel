@@ -1,21 +1,24 @@
 define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
-        'configurationpage?name=SyncChannelSharedHelpersJs'],
-    function ($, store, helpers) {
+        'configurationpage?name=SyncChannelSharedHelpersJs',
+        'configurationpage?name=SyncChannelDirtyTrackerJs'],
+    function ($, store, helpers, dirtyTracker) {
         'use strict';
 
+        var tracker = dirtyTracker.createTracker(function (tree) { return JSON.stringify(tree); });
+
+        // dirtyTracker only exposes compare (isDirty) + UI (refreshUi), not
+        // the raw snapshot itself — same split connectionsTab.js uses (see
+        // its own connectionsSavedFullSnapshot), so restoring on Discard
+        // needs this alongside the tracker, not instead of it.
         var folderTreeSavedSnapshot = null;
 
         function snapshotFolderTreeSaved() {
             folderTreeSavedSnapshot = JSON.stringify(store.get('currentTree'));
+            tracker.snapshotSaved(store.get('currentTree'));
         }
 
         function refreshFolderTreeDirtyState(view) {
-            var warning = view.querySelector('#ftDirtyWarning');
-            var discard = view.querySelector('#ftDiscardBtn');
-            if (!warning) return;
-            var dirty = folderTreeSavedSnapshot !== null && JSON.stringify(store.get('currentTree')) !== folderTreeSavedSnapshot;
-            warning.innerText = dirty ? 'Unsaved changes' : '';
-            if (discard) discard.disabled = !dirty;
+            tracker.refreshUi(view, '#ftDirtyWarning', '#ftDiscardBtn', store.get('currentTree'));
         }
 
         function discardFolderTreeChanges(view) {
@@ -491,8 +494,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         function init(view) {
             view.querySelector('#ftSaveBtn').addEventListener('click', function () { saveFolderTree(view); });
             view.querySelector('#ftDiscardBtn').addEventListener('click', function () { discardFolderTreeChanges(view); });
-            renderTree(view);
             snapshotFolderTreeSaved();
+            renderTree(view);
 
             // Connections/Schemas/RuleSets changing elsewhere doesn't need
             // to re-render the tree itself (fetch rows resolve labels live
@@ -507,6 +510,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         return {
             init: init,
-            renderTree: renderTree
+            renderTree: renderTree,
+            hasUnsavedChanges: function () { return tracker.isDirty(store.get('currentTree')); }
         };
     });

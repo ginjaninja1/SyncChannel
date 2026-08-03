@@ -24,12 +24,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             return output;
         }
 
-        // Shared floating preview panel used when hovering a Function node's
-        // badge (e.g. "Array") to show a few resolved examples — same idea
-        // as the root-level esMapExamples row, but that one is laid out
-        // inline as part of the mapping row's flexbox and can't be reused
-        // for a node buried inside nested chips, so this is a single
-        // position:fixed panel appended once and repositioned per-hover.
+        // Shared floating panel — used ONLY for the "every record resolved
+        // to a single image" case (e.g. an Array[0]-sliced field). Same
+        // position:fixed panel reused across every anchor rather than one
+        // per chip.
         var floatingExamplesPanel = null;
         function ensureFloatingExamplesPanel() {
             if (!floatingExamplesPanel) {
@@ -39,38 +37,65 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             }
             return floatingExamplesPanel;
         }
-        function showFloatingExamples(anchorEl, examples, roleHint) {
-            var panel = ensureFloatingExamplesPanel();
-            panel.innerHTML = '';
-            (examples || []).forEach(function (example) {
-                var looksLikeImage = /^https?:\/\/\S+$/i.test(example) &&
-                    (/\.(jpe?g|png|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(example) || /image|poster|thumb|art/i.test(roleHint || ''));
-                if (looksLikeImage) {
+        function hideFloatingExamples() {
+            if (floatingExamplesPanel) floatingExamplesPanel.style.display = 'none';
+        }
+
+        // A record's resolved example counts as "an image" only if it is
+        // itself a single, bare URL — NOT a comma-joined list (two images
+        // for one movie is a list, and lists are text, per the standing
+        // "lists are comma joined" rule). This is what previously broke:
+        // testing the whole joined string as one unit made any multi-value
+        // record fail the image test and silently degrade to text.
+        function isSingleImageValue(value, roleHint) {
+            return value !== null &&
+                /^https?:\/\/\S+$/i.test(value) &&
+                (/\.(jpe?g|png|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(value) || /image|poster|thumb|art/i.test(roleHint || ''));
+        }
+
+        // Single hover-preview implementation for every anchor that shows
+        // resolved examples — the row legend, a mapping's Field chips, a
+        // Function/Array badge, and a palette chip all call this the same
+        // way, so they look and behave identically. The choice is
+        // whole-field, never a per-line mix: only when EVERY non-null
+        // record example is a single bare image URL do we show the
+        // side-by-side image panel (dark background, as the Array badge
+        // always did); anything else — any record being a list, or not
+        // image-like — falls back to the plain native title tooltip
+        // (stacked lines via '\n', default text, no custom background,
+        // exactly how the legend already behaved for non-image fields).
+        function updateHoverPreview(anchorEl, examples, roleHint) {
+            var nonNull = (examples || []).filter(function (e) { return e !== null; });
+            var allImages = nonNull.length > 0 && nonNull.every(function (e) { return isSingleImageValue(e, roleHint); });
+
+            if (allImages) {
+                anchorEl.title = '';
+                var panel = ensureFloatingExamplesPanel();
+                panel.innerHTML = '';
+                nonNull.forEach(function (url) {
                     var img = document.createElement('img');
                     img.className = 'esMapExampleImage';
-                    img.src = example;
-                    img.alt = example;
-                    img.title = example;
+                    img.src = url;
+                    img.alt = url;
+                    img.title = url;
                     img.addEventListener('error', function () {
                         if (img.parentNode) img.parentNode.removeChild(img);
                     });
                     panel.appendChild(img);
-                } else {
-                    var span = document.createElement('span');
-                    span.className = 'esMapExample';
-                    span.innerText = example;
-                    panel.appendChild(span);
-                }
-            });
-            if (!panel.children.length) { panel.style.display = 'none'; return; }
-            var rect = anchorEl.getBoundingClientRect();
-            panel.style.display = 'flex';
-            panel.style.left = Math.max(4, rect.left) + 'px';
-            panel.style.top = (rect.bottom + 6) + 'px';
+                });
+                if (!panel.children.length) { panel.style.display = 'none'; return; }
+                var rect = anchorEl.getBoundingClientRect();
+                panel.style.display = 'flex';
+                panel.style.left = Math.max(4, rect.left) + 'px';
+                panel.style.top = (rect.bottom + 6) + 'px';
+            } else {
+                hideFloatingExamples();
+                anchorEl.title = (examples || []).length
+                    ? examples.map(function (e) { return e === null ? 'null' : e; }).join('\n')
+                    : 'No examples are available for the current mapping.';
+            }
         }
-        function hideFloatingExamples() {
-            if (floatingExamplesPanel) floatingExamplesPanel.style.display = 'none';
-        }
+        function hideHoverPreview() { hideFloatingExamples(); }
 
         var OBJECT_KINDS = [
             { value: 'FlatMedia', label: 'Flat Media (single playable item, e.g. Movie)' },
@@ -168,6 +193,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             select.value = currentSchemaId;
 
             select.onchange = function () {
+                if (schemasHaveUnsavedChanges) {
+                    alert('Save or discard your schema changes before switching schemas.');
+                    select.value = store.get('currentSchemaId');
+                    return;
+                }
                 schemaDiscoveryToken++;
                 store.set('currentSchemaId', select.value);
                 renderSchemaForm(view);
@@ -187,9 +217,16 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             });
             if (connections.some(function (c) { return c.Id === prior; })) select.value = prior;
             if (!select.value && connections.length) select.value = connections[0].Id;
+            lastConnectionSelectValue = select.value;
             if (!select.dataset.wired) {
                 select.dataset.wired = '1';
                 select.addEventListener('change', function () {
+                    if (schemasHaveUnsavedChanges) {
+                        alert('Save or discard your schema changes before switching connections.');
+                        select.value = lastConnectionSelectValue;
+                        return;
+                    }
+                    lastConnectionSelectValue = select.value;
                     schemaDiscoveryToken++;
                     store.set('currentSchemaId', '');
                     renderSchemaSelect(view);
@@ -505,9 +542,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             row.appendChild(line);
 
-            var examplesEl = document.createElement('div');
-            examplesEl.className = 'esMapExamples';
-
             var warnEl = document.createElement('div');
             warnEl.className = 'fieldDescription';
             warnEl.style.color = '#e0a030';
@@ -654,42 +688,13 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 return output;
             }
 
-            function refreshExamples() {
-                examplesEl.innerHTML = '';
-                var examples = resolvedExamples();
-                legend.title = examples.length
-                    ? examples.map(function (e) { return e === null ? 'null' : e; }).join('\n')
-                    : 'No examples are available for the current mapping.';
-
-                examples.forEach(function (example) {
-                    if (example === null) return;
-                    var looksLikeImage = /^https?:\/\/\S+$/i.test(example) &&
-                        (/\.(jpe?g|png|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(example) ||
-                            /image|poster|thumb|art/i.test(warnRoleKey || labelText));
-                    if (looksLikeImage) {
-                        var img = document.createElement('img');
-                        img.className = 'esMapExampleImage';
-                        img.src = example;
-                        img.alt = example;
-                        img.title = example;
-                        img.addEventListener('error', function () {
-                            if (img.parentNode) img.parentNode.removeChild(img);
-                            if (!examplesEl.children.length) examplesEl.style.display = 'none';
-                        });
-                        examplesEl.appendChild(img);
-                    }
-                });
+            function showLegendPreview() {
+                updateHoverPreview(legend, resolvedExamples(), warnRoleKey || labelText);
             }
-
-            function showExamples() {
-                refreshExamples();
-                examplesEl.style.display = examplesEl.children.length ? 'flex' : 'none';
-            }
-            function hideExamples() { examplesEl.style.display = 'none'; }
-            legend.addEventListener('mouseenter', showExamples);
-            legend.addEventListener('mouseleave', hideExamples);
-            legend.addEventListener('focus', showExamples);
-            legend.addEventListener('blur', hideExamples);
+            legend.addEventListener('mouseenter', showLegendPreview);
+            legend.addEventListener('mouseleave', hideHoverPreview);
+            legend.addEventListener('focus', showLegendPreview);
+            legend.addEventListener('blur', hideHoverPreview);
 
             // ---- Recursive node-tree rendering ----
 
@@ -713,8 +718,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 nodesArray.forEach(function (node, idx) {
                     containerEl.appendChild(renderNode(node, nodesArray, idx, fbp, connection));
                 });
-
-                if (isRoot) containerEl.appendChild(examplesEl);
 
                 if (!locked) wireContainerDropTargets(containerEl, nodesArray);
             }
@@ -760,7 +763,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         node.Value = e.target.value;
                         input.size = Math.min(20, Math.max(3, e.target.value.length));
                         chip.title = 'Literal text: ' + (e.target.value || '(empty)');
-                        refreshExamples();
                         markSchemasDirty(activeView);
                     });
                     chip.appendChild(input);
@@ -771,7 +773,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     if (node.Kind === 'Field') {
                         var field = fbp[node.Value];
                         node.CachedType = field ? field.Type : node.CachedType;
-                        chip.title = fieldPerRecordExamples(field).map(function (v) { return v === null ? 'null' : v; }).join('\n');
+                        chip.addEventListener('mouseenter', function () {
+                            updateHoverPreview(chip, nodeResolvedExamples(node), warnRoleKey || labelText);
+                        });
+                        chip.addEventListener('mouseleave', hideHoverPreview);
                     } else if (node.Kind === 'BaseUrl') {
                         chip.title = 'Value: ' + ((connection && connection.BaseUrl) || '(not set)');
                     } else if (node.Kind === 'ApiKeyName') {
@@ -829,9 +834,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     ? 'Function applied to whatever is inside the brackets.'
                     : 'Array only works wrapping a single list-type field — this won\'t resolve to anything as configured. Saving is blocked until this is fixed.';
                 badge.addEventListener('mouseenter', function () {
-                    showFloatingExamples(badge, nodeResolvedExamples(node), warnRoleKey || labelText);
+                    if (valid) updateHoverPreview(badge, nodeResolvedExamples(node), warnRoleKey || labelText);
                 });
-                badge.addEventListener('mouseleave', hideFloatingExamples);
+                badge.addEventListener('mouseleave', hideHoverPreview);
                 wrap.appendChild(badge);
 
                 var paramInput = document.createElement('input');
@@ -848,7 +853,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     paramInput.classList.remove('esMapModifierInvalid');
                     node.Start = parsed.Start;
                     node.End = parsed.End;
-                    refreshExamples();
                     markSchemasDirty(activeView);
                 });
                 paramInput.addEventListener('blur', function () {
@@ -1034,7 +1038,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             function renderSegments() {
                 renderNodeList(valueEl, mapping.Segments, fieldsByPath(), mapperConnId ? store.findConnection(mapperConnId) : null, true);
                 refreshWarning();
-                refreshExamples();
                 refreshSchemaDirtyState(activeView);
             }
 
@@ -1080,8 +1083,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     ruleBuilderTab.persistFieldFavorite(schemaId, f.JsonPath, field.IsFavorite);
                 });
 
-                var perRecord = fieldPerRecordExamples(f);
-                chip.title = chip.title + '\n' + perRecord.map(function (v) { return v === null ? 'null' : v; }).join('\n');
+                chip.addEventListener('mouseenter', function () {
+                    updateHoverPreview(chip, fieldPerRecordExamples(f), f.DisplayName || f.JsonPath);
+                });
+                chip.addEventListener('mouseleave', hideHoverPreview);
 
                 chipsWrap.appendChild(chip);
             });
@@ -1651,6 +1656,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         var schemaDiscoveryToken = 0;
+        // Last value the connection select was legitimately set to (by
+        // render or a completed switch) — used to revert the dropdown when
+        // a switch is blocked by unsaved schema changes, since by the time
+        // 'change' fires the browser has already applied the new value.
+        var lastConnectionSelectValue = '';
 
         function endpointObjectLabel(schema) {
             var parts = (schema.Path || '').split('?')[0].split('/').filter(function (p) { return !!p; });
@@ -2304,6 +2314,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         return {
             init: init,
             newSchema: newSchema,
-            renderSchemaForm: renderSchemaForm
+            renderSchemaForm: renderSchemaForm,
+            hasUnsavedChanges: function () { return schemasHaveUnsavedChanges; }
         };
     });

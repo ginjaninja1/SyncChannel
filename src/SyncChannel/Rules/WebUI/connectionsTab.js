@@ -61,6 +61,14 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         function snapshotSaved() {
             tracker.snapshotSaved(store.get('connections'));
+            // discardChanges() needs the exact prior connection objects back
+            // (including fields editableConnectionsJson strips out, like
+            // LastTestSucceeded) — the tracker only keeps a comparison
+            // string, not something restorable, so this is captured
+            // separately. Missing this line was the bug: discardChanges()
+            // read connectionsSavedFullSnapshot, found it permanently null,
+            // and silently no-op'd on every Discard click.
+            store.set('connectionsSavedFullSnapshot', JSON.stringify(store.get('connections')));
             store.set('pendingConnectionRemovals', {});
             var schemaOrder = {};
             store.get('schemas').forEach(function (schema, index) { schemaOrder[schema.Id] = index; });
@@ -611,6 +619,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             init: init,
             renderConnectionsTab: renderConnectionsTab,
             refreshDirtyState: refreshDirtyState,
-            renderSystemTypeDatalist: renderSystemTypeDatalist
+            renderSystemTypeDatalist: renderSystemTypeDatalist,
+            hasUnsavedChanges: function () { return tracker.isDirty(store.get('connections')); }
         };
     });

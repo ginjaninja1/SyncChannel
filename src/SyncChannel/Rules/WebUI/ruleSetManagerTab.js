@@ -508,6 +508,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderConnectionAndSchemaSelects: renderConnectionAndSchemaSelects,
             renderRuleSetSelect: renderRuleSetSelect,
             renderCanvasForCurrentIndex: renderCanvasForCurrentIndex,
-            refreshRuleSetDirtyState: refreshRuleSetDirtyState
+            refreshRuleSetDirtyState: refreshRuleSetDirtyState,
+            hasUnsavedChanges: function () { return store.isRuleSetsDirty(); }
         };
     });
