@@ -112,11 +112,15 @@ namespace SyncChannel.Configuration
         // is. Stamped onto each field by ChannelSyncApiSurface at read time.
         public bool IsFavorite { get; set; }
 
-        // Up to 3 distinct, non-empty sample values seen for this path
-        // during discovery — shown next to the field in the mapper UI so an
-        // admin can tell what it actually contains without opening the raw
-        // response.
-        public List<string> Examples { get; set; } = new List<string>();
+        // Sample values seen for this path during discovery, one entry per
+        // source record (first 3 records), in that record's own document
+        // order — shown next to the field in the mapper UI so an admin can
+        // tell what it actually contains without opening the raw response.
+        // Examples[i] is that record's own value(s) for this path (empty
+        // list if the record doesn't have it) — NOT a flattened/deduped
+        // pool across records, so per-record preview and Array[N] indexing
+        // stay aligned to the record they came from.
+        public List<List<string>> Examples { get; set; } = new List<List<string>>();
     }
 
     // One node of a FieldMapping's tree. A mapping is an ordered

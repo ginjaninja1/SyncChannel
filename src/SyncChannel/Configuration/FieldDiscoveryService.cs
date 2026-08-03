@@ -104,12 +104,15 @@ namespace SyncChannel.Configuration
             var typeByPath = new Dictionary<string, SchemaFieldType>(StringComparer.OrdinalIgnoreCase);
             var orderByPath = new List<string>(); // first-seen order, preserved as the tiebreaker within a sort group
 
-            // Up to 3 distinct, non-empty example values per path — shown
-            // next to a field in the mapper UI so an admin can tell what a
-            // path actually contains without opening the raw response.
-            // Capped and distinct-only so a field that's the same on every
-            // item (e.g. a constant "type": "artist") doesn't just repeat.
-            var examplesByPath = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            // Per-path, per-RECORD raw values — slot[i] holds every value
+            // seen for that path within record i (document order), for the
+            // first MaxExampleRecords records only. Positional by record,
+            // deliberately NOT flattened/deduped across records: that's what
+            // lets the mapper preview show "record 2 had no value" instead of
+            // silently reusing record 0's value, and lets Array[N] index into
+            // one record's own array rather than a cross-record pool. Type
+            // inference (Merge, below) still unions across every record.
+            var examplesByPath = new Dictionary<string, List<string>[]>(StringComparer.OrdinalIgnoreCase);
 
             using (var doc = JsonDocument.Parse(rawJson))
             {
@@ -118,9 +121,11 @@ namespace SyncChannel.Configuration
                     throw new InvalidOperationException("Discovery requires a JSON array response.");
                 }
 
+                var recordIndex = 0;
                 foreach (var element in doc.RootElement.EnumerateArray())
                 {
-                    WalkObject(element, string.Empty, 1, typeByPath, orderByPath, examplesByPath);
+                    WalkObject(element, string.Empty, 1, typeByPath, orderByPath, examplesByPath, recordIndex);
+                    recordIndex++;
                 }
             }
 
@@ -130,16 +135,28 @@ namespace SyncChannel.Configuration
                 DisplayName = path,
                 Type = typeByPath[path],
                 IsFavorite = favorites.Contains(path),
-                Examples = examplesByPath.TryGetValue(path, out var ex) ? ex : new List<string>()
+                Examples = examplesByPath.TryGetValue(path, out var slots)
+                    ? slots.Select(s => s ?? new List<string>()).ToList()
+                    : EmptyExampleRecords()
             }).ToList();
 
             return Sort(fields);
         }
 
+        // Every record slot present, even when nothing was ever captured for
+        // this path — callers (the mapper preview) index by record position
+        // and need a slot per record to know "absent" from "not discovered".
+        private static List<List<string>> EmptyExampleRecords()
+        {
+            var list = new List<List<string>>();
+            for (var i = 0; i < MaxExampleRecords; i++) list.Add(new List<string>());
+            return list;
+        }
+
         private static void WalkObject(
             JsonElement el, string prefix, int depth,
             Dictionary<string, SchemaFieldType> typeByPath, List<string> orderByPath,
-            Dictionary<string, List<string>> examplesByPath)
+            Dictionary<string, List<string>[]> examplesByPath, int recordIndex)
         {
             if (depth > MaxDepth || el.ValueKind != JsonValueKind.Object) return;
 
@@ -152,25 +169,25 @@ namespace SyncChannel.Configuration
                     case JsonValueKind.True:
                     case JsonValueKind.False:
                         Merge(typeByPath, orderByPath, path, SchemaFieldType.Bool);
-                        AddExample(examplesByPath, path, prop.Value.GetBoolean().ToString());
+                        AddExample(examplesByPath, path, prop.Value.GetBoolean().ToString(), recordIndex);
                         break;
 
                     case JsonValueKind.Number:
                         Merge(typeByPath, orderByPath, path, SchemaFieldType.Number);
-                        AddExample(examplesByPath, path, prop.Value.ToString());
+                        AddExample(examplesByPath, path, prop.Value.ToString(), recordIndex);
                         break;
 
                     case JsonValueKind.String:
                         Merge(typeByPath, orderByPath, path, LooksLikeDate(prop.Value.GetString()) ? SchemaFieldType.Date : SchemaFieldType.String);
-                        AddExample(examplesByPath, path, prop.Value.GetString());
+                        AddExample(examplesByPath, path, prop.Value.GetString(), recordIndex);
                         break;
 
                     case JsonValueKind.Object:
-                        WalkObject(prop.Value, path, depth + 1, typeByPath, orderByPath, examplesByPath);
+                        WalkObject(prop.Value, path, depth + 1, typeByPath, orderByPath, examplesByPath, recordIndex);
                         break;
 
                     case JsonValueKind.Array:
-                        WalkArray(prop.Value, path, depth + 1, typeByPath, orderByPath, examplesByPath);
+                        WalkArray(prop.Value, path, depth + 1, typeByPath, orderByPath, examplesByPath, recordIndex);
                         break;
 
                         // Null/Undefined: skip. Another element in the array may
@@ -180,19 +197,25 @@ namespace SyncChannel.Configuration
             }
         }
 
-        private const int MaxExamplesPerPath = 3;
+        // How many leading records get their own example slot, and a safety
+        // cap on values captured per record (a record's own array is
+        // normally tiny — this just bounds a pathological response).
+        private const int MaxExampleRecords = 3;
+        private const int MaxValuesPerRecord = 20;
 
-        private static void AddExample(Dictionary<string, List<string>> examplesByPath, string path, string value)
+        private static void AddExample(Dictionary<string, List<string>[]> examplesByPath, string path, string value, int recordIndex)
         {
-            if (string.IsNullOrEmpty(value)) return;
+            if (string.IsNullOrEmpty(value) || recordIndex >= MaxExampleRecords) return;
 
-            if (!examplesByPath.TryGetValue(path, out var list))
+            if (!examplesByPath.TryGetValue(path, out var slots))
             {
-                list = new List<string>();
-                examplesByPath[path] = list;
+                slots = new List<string>[MaxExampleRecords];
+                for (var i = 0; i < MaxExampleRecords; i++) slots[i] = new List<string>();
+                examplesByPath[path] = slots;
             }
 
-            if (list.Count < MaxExamplesPerPath && !list.Contains(value, StringComparer.OrdinalIgnoreCase))
+            var list = slots[recordIndex];
+            if (list.Count < MaxValuesPerRecord)
             {
                 list.Add(value);
             }
@@ -201,7 +224,7 @@ namespace SyncChannel.Configuration
         private static void WalkArray(
             JsonElement arr, string path, int depth,
             Dictionary<string, SchemaFieldType> typeByPath, List<string> orderByPath,
-            Dictionary<string, List<string>> examplesByPath)
+            Dictionary<string, List<string>[]> examplesByPath, int recordIndex)
         {
             if (depth > MaxDepth) return;
 
@@ -213,14 +236,14 @@ namespace SyncChannel.Configuration
                 {
                     case JsonValueKind.String:
                         sawPrimitive = true;
-                        AddExample(examplesByPath, path, item.GetString());
+                        AddExample(examplesByPath, path, item.GetString(), recordIndex);
                         break;
 
                     case JsonValueKind.Number:
                     case JsonValueKind.True:
                     case JsonValueKind.False:
                         sawPrimitive = true;
-                        AddExample(examplesByPath, path, item.ToString());
+                        AddExample(examplesByPath, path, item.ToString(), recordIndex);
                         break;
 
                     case JsonValueKind.Object:
@@ -239,13 +262,13 @@ namespace SyncChannel.Configuration
                             {
                                 case JsonValueKind.String:
                                     Merge(typeByPath, orderByPath, subPath, SchemaFieldType.List);
-                                    AddExample(examplesByPath, subPath, prop.Value.GetString());
+                                    AddExample(examplesByPath, subPath, prop.Value.GetString(), recordIndex);
                                     break;
                                 case JsonValueKind.Number:
                                 case JsonValueKind.True:
                                 case JsonValueKind.False:
                                     Merge(typeByPath, orderByPath, subPath, SchemaFieldType.List);
-                                    AddExample(examplesByPath, subPath, prop.Value.ToString());
+                                    AddExample(examplesByPath, subPath, prop.Value.ToString(), recordIndex);
                                     break;
                             }
                         }

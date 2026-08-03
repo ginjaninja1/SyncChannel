@@ -8,6 +8,22 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
     function ($, store, dragEngine, fieldDiscovery, helpers, ruleBuilderTab, connectionsTab, ruleSetManagerTab) {
         'use strict';
 
+        // field.Examples is per-record (Examples[i] = record i's own
+        // values, possibly several e.g. two images per movie). Chip
+        // tooltips should read the same way as the row-level resolved
+        // preview: one line per record, that record's values comma-joined,
+        // 'null' when the record had no value — NOT a flattened/deduped
+        // pool across records (that would merge distinct records' values
+        // together and silently drop "record has no value" information).
+        function fieldPerRecordExamples(field) {
+            var output = [];
+            for (var i = 0; i < 3; i++) {
+                var values = field && field.Examples ? field.Examples[i] : null;
+                output.push(values && values.length ? values.join(', ') : null);
+            }
+            return output;
+        }
+
         // Shared floating preview panel used when hovering a Function node's
         // badge (e.g. "Array") to show a few resolved examples — same idea
         // as the root-level esMapExamples row, but that one is laid out
@@ -518,13 +534,23 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             // a Function node concatenates its Children's preview text (or,
             // for ArraySlice, reads its single Field child's raw example
             // list directly), then applies its own operation.
+            // Returns the raw record-record's example values for `field` at
+            // `exampleIndex` (record 0/1/2), or null if that field wasn't
+            // discovered or that particular record had no value at this
+            // path — never falls back to another record's value.
+            function fieldExampleRecord(field, exampleIndex) {
+                if (!field || !field.Examples || !field.Examples[exampleIndex]) return null;
+                var values = field.Examples[exampleIndex];
+                return values.length ? values : null;
+            }
+
             function previewResolveNode(node, fbp, connection, exampleIndex) {
                 switch (node.Kind) {
                     case 'Field':
                         var field = fbp[node.Value];
-                        var examples = field && field.Examples ? field.Examples : [];
-                        if (!examples.length) return { text: '', hasFieldValue: false };
-                        return { text: String(examples[Math.min(exampleIndex, examples.length - 1)]), hasFieldValue: true };
+                        var recordValues = fieldExampleRecord(field, exampleIndex);
+                        if (recordValues === null) return { text: null, hasFieldValue: false };
+                        return { text: recordValues.join(', '), hasFieldValue: true };
                     case 'CustomText':
                         return { text: node.Value || '', hasFieldValue: false };
                     case 'BaseUrl':
@@ -546,15 +572,17 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 if (node.Function === 'ArraySlice') {
                     if (node.Children.length === 1 && node.Children[0].Kind === 'Field') {
                         var field = fbp[node.Children[0].Value];
-                        var examples = (field && field.Examples) || [];
-                        if (!examples.length) return { text: '', hasFieldValue: false };
-                        var sliced = node.End < 0 ? examples : examples.slice(
-                            Math.max(0, Math.min(node.Start, examples.length - 1)),
-                            Math.max(0, Math.min(node.End, examples.length - 1)) + 1
+                        var recordValues = fieldExampleRecord(field, exampleIndex);
+                        if (recordValues === null) return { text: null, hasFieldValue: false };
+                        var sliced = node.End < 0 ? recordValues : recordValues.slice(
+                            Math.max(0, Math.min(node.Start, recordValues.length - 1)),
+                            Math.max(0, Math.min(node.End, recordValues.length - 1)) + 1
                         );
-                        return { text: sliced.join(', '), hasFieldValue: true };
+                        return sliced.length
+                            ? { text: sliced.join(', '), hasFieldValue: true }
+                            : { text: null, hasFieldValue: false };
                     }
-                    return { text: '', hasFieldValue: false };
+                    return { text: null, hasFieldValue: false };
                 }
                 var hasFieldValue = false;
                 var joined = node.Children.map(function (c) {
@@ -580,10 +608,18 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 return value;
             }
 
+            // One line per source record (0/1/2), not deduped away — a
+            // record that had no value for the mapped field(s) shows as
+            // null rather than being dropped or silently repeating another
+            // record's value. Exception: a mapping with no field/slice
+            // segments at all (pure literal text) resolves identically for
+            // every record, so that case collapses to a single line instead
+            // of showing the same text three times.
             function resolvedExamples() {
                 var fbp = fieldsByPath();
                 var connection = mapperConnId ? store.findConnection(mapperConnId) : null;
-                var output = [];
+                var perRecord = [];
+                var anyFieldValue = false;
                 for (var exampleIndex = 0; exampleIndex < 3; exampleIndex++) {
                     var hasFieldValue = false;
                     var value = mapping.Segments.map(function (seg) {
@@ -591,33 +627,42 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         if (r.hasFieldValue) hasFieldValue = true;
                         return r.text;
                     }).join('');
-                    if (value && (hasFieldValue || exampleIndex === 0) && output.indexOf(value) === -1) output.push(value);
+                    if (hasFieldValue) anyFieldValue = true;
+                    perRecord.push({ value: value, hasFieldValue: hasFieldValue });
                 }
-                return output.slice(0, 3);
+
+                if (!anyFieldValue) {
+                    return perRecord[0].value ? [perRecord[0].value] : [];
+                }
+
+                return perRecord.map(function (r) { return r.hasFieldValue ? r.value : null; });
             }
 
             // Same idea as resolvedExamples() above, but scoped to a single
             // node rather than the whole mapping — used for the hover
             // preview on a Function chip's own badge (e.g. Array), so
             // hovering "Array[0]" shows what that slice actually resolves
-            // to, not the whole field's mapping.
+            // to per record, not the whole field's mapping.
             function nodeResolvedExamples(node) {
                 var fbp = fieldsByPath();
                 var connection = mapperConnId ? store.findConnection(mapperConnId) : null;
                 var output = [];
                 for (var exampleIndex = 0; exampleIndex < 3; exampleIndex++) {
                     var r = previewResolveNode(node, fbp, connection, exampleIndex);
-                    if (r.text && output.indexOf(r.text) === -1) output.push(r.text);
+                    output.push(r.hasFieldValue ? r.text : null);
                 }
-                return output.slice(0, 3);
+                return output;
             }
 
             function refreshExamples() {
                 examplesEl.innerHTML = '';
                 var examples = resolvedExamples();
-                legend.title = examples.length ? examples.join('\n') : 'No examples are available for the current mapping.';
+                legend.title = examples.length
+                    ? examples.map(function (e) { return e === null ? 'null' : e; }).join('\n')
+                    : 'No examples are available for the current mapping.';
 
                 examples.forEach(function (example) {
+                    if (example === null) return;
                     var looksLikeImage = /^https?:\/\/\S+$/i.test(example) &&
                         (/\.(jpe?g|png|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(example) ||
                             /image|poster|thumb|art/i.test(warnRoleKey || labelText));
@@ -726,7 +771,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     if (node.Kind === 'Field') {
                         var field = fbp[node.Value];
                         node.CachedType = field ? field.Type : node.CachedType;
-                        if (field && field.Examples && field.Examples.length) chip.title = field.Examples.join('\n');
+                        chip.title = fieldPerRecordExamples(field).map(function (v) { return v === null ? 'null' : v; }).join('\n');
                     } else if (node.Kind === 'BaseUrl') {
                         chip.title = 'Value: ' + ((connection && connection.BaseUrl) || '(not set)');
                     } else if (node.Kind === 'ApiKeyName') {
@@ -1035,9 +1080,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     ruleBuilderTab.persistFieldFavorite(schemaId, f.JsonPath, field.IsFavorite);
                 });
 
-                if (f.Examples && f.Examples.length) {
-                    chip.title = chip.title + '\n' + f.Examples.join('\n');
-                }
+                var perRecord = fieldPerRecordExamples(f);
+                chip.title = chip.title + '\n' + perRecord.map(function (v) { return v === null ? 'null' : v; }).join('\n');
 
                 chipsWrap.appendChild(chip);
             });
