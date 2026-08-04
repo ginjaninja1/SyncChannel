@@ -96,14 +96,32 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
         function hideHoverPreview() { hideFloatingExamples(); }
 
-        var OBJECT_KINDS = [
-            { value: 'FlatMedia', label: 'Flat Media (single playable item, e.g. Movie)' },
-            { value: 'Series', label: 'Series (Series -> Season -> Episode)' },
-            { value: 'MusicArtistAlbum', label: 'Music (Artist -> Album -> Song)' },
-            { value: 'PhotoAlbum', label: 'Photo Album (Album -> Photo)' },
-            { value: 'GenericContainer', label: 'Generic Container (N folders -> leaf)' },
-            { value: 'DisplayCard', label: 'Display Card (picture + name only, nothing underneath, nothing to play)' }
+        var DESTINATION_PROFILES = [
+            { value: 'Movies', label: 'Movies (each row is a Movie)' },
+            { value: 'ShowsWithComingSoonEpisode', label: 'Shows with Coming Soon episode (each row is a Show)' },
+            { value: 'PlayableItemsAsEpisodes', label: 'Playable items as episodes (group rows by Show and Season)' },
+            { value: 'Videos', label: 'Videos (each row is a playable Video)' },
+            { value: 'AudioTracks', label: 'Audio tracks (each row is a Track)' },
+            { value: 'MusicCatalogueExperimental', label: 'Music catalogue (experimental for testing)' },
+            { value: 'PhotoCollection', label: 'Photo collection (this fetch is one Album; each row is a Photo)' },
+            { value: 'NestedMedia', label: 'Advanced nested media' }
         ];
+
+        function destinationProfile(schema) {
+            return schema.Presentation || 'Movies';
+        }
+
+        function applyDestinationProfile(schema, profile) {
+            schema.Presentation = profile;
+            schema.ObjectKind = profile === 'ShowsWithComingSoonEpisode' ? 'Series' :
+                (profile === 'MusicCatalogueExperimental' ? 'MusicArtistAlbum' :
+                    (profile === 'PhotoCollection' ? 'PhotoAlbum' :
+                        (profile === 'NestedMedia' ? 'GenericContainer' : 'FlatMedia')));
+            schema.LeafMediaType = (profile === 'AudioTracks' || profile === 'MusicCatalogueExperimental') ? 'Audio' : 'Video';
+            schema.LeafContentType = profile === 'Movies' ? 'Movie' :
+                ((profile === 'AudioTracks' || profile === 'MusicCatalogueExperimental') ? 'Song' :
+                    (profile === 'PlayableItemsAsEpisodes' ? 'Episode' : 'Clip'));
+        }
 
         var LEAF_MEDIA_TYPES = ['Video', 'Audio'];
         var LEAF_CONTENT_TYPES = ['Clip', 'Podcast', 'Trailer', 'Movie', 'Episode', 'Song', 'MovieExtra', 'TvExtra', 'GameExtra', 'MusicVideo'];
@@ -119,6 +137,15 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             AlbumArtistField: [/albumartist/i],
             AlbumField: [/^album/i],
             MediaFileUrlField: [/^url$/i, /fileurl/i, /mediaurl/i, /^path$/i]
+            ,ShowIdentityField: [/seriesid/i, /showid/i, /series.*guid/i]
+            ,ShowTitleField: [/series.*title/i, /show.*title/i, /series.*name/i, /show.*name/i]
+            ,ShowOverviewField: [/series.*overview/i, /show.*overview/i]
+            ,ShowPosterUrlField: [/series.*poster/i, /show.*poster/i]
+            ,SeasonNumberField: [/seasonnumber/i, /^season$/i]
+            ,SeasonTitleField: [/seasontitle/i, /seasonname/i]
+            ,EpisodeNumberField: [/episodenumber/i, /^episode$/i]
+            ,ArtistIdentityField: [/artistid/i, /artist.*guid/i]
+            ,AlbumIdentityField: [/albumid/i, /album.*guid/i]
         };
 
         var lastDiscoveryConnBySchemaId = {};
@@ -148,6 +175,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 DisplayName: displayName || 'New Schema',
                 ConnectionId: connectionId || '',
                 IsBuiltIn: false,
+                Presentation: 'Movies',
                 ObjectKind: 'FlatMedia',
                 LeafMediaType: 'Video',
                 LeafContentType: 'Movie',
@@ -165,8 +193,21 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 ArtistField: emptyMapping(),
                 AlbumArtistField: emptyMapping(),
                 AlbumField: emptyMapping(),
+                ShowIdentityField: emptyMapping(),
+                ShowTitleField: emptyMapping(),
+                ShowOverviewField: emptyMapping(),
+                ShowPosterUrlField: emptyMapping(),
+                SeasonNumberField: emptyMapping(),
+                SeasonTitleField: emptyMapping(),
+                EpisodeNumberField: emptyMapping(),
+                ArtistIdentityField: emptyMapping(),
+                AlbumIdentityField: emptyMapping(),
                 MediaFileUrlField: emptyMapping(),
                 ProviderIdFields: {},
+                SeriesProviderIdFields: {},
+                SeasonProviderIdFields: {},
+                ArtistProviderIdFields: {},
+                AlbumProviderIdFields: {},
                 Fields: []
             };
         }
@@ -1316,12 +1357,20 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             var objectSettings = document.createElement('div');
             objectSettings.className = 'esInlineSettings';
-            objectSettings.appendChild(esLabeledRow('Object kind', esSelectInput(OBJECT_KINDS, schema.ObjectKind, locked, function (v) {
-                schema.ObjectKind = v;
+            objectSettings.appendChild(esLabeledRow('Emby destination', esSelectInput(DESTINATION_PROFILES, destinationProfile(schema), locked, function (v) {
+                applyDestinationProfile(schema, v);
                 renderSchemaForm(view);
-            }), 'Which Emby channel shape this schema\'s items become. Fixed choices -- not every combination of container/leaf is meaningful in Emby.'));
+            }), 'Choose what the user should see in Emby. The plugin constructs the required Emby object hierarchy behind this choice.'));
 
-            if (schema.ObjectKind === 'FlatMedia' || schema.ObjectKind === 'GenericContainer') {
+            if (schema.Presentation === 'Videos') {
+                var videoStyles = ['Clip', 'Trailer', 'Podcast', 'MusicVideo', 'MovieExtra', 'TvExtra', 'GameExtra'];
+                objectSettings.appendChild(esLabeledRow('Video style', esSelectInput(
+                    videoStyles.map(function (t) { return { value: t, label: t === 'Clip' ? 'General video' : t }; }),
+                    schema.LeafContentType, locked, function (v) { schema.LeafContentType = v; }),
+                    'Controls how Emby classifies each playable video. It does not change the source media URL.'));
+            }
+
+            if (schema.ObjectKind === 'GenericContainer') {
                 objectSettings.appendChild(esLabeledRow('Leaf media type', esSelectInput(
                     LEAF_MEDIA_TYPES.map(function (t) { return { value: t, label: t }; }),
                     schema.LeafMediaType, locked, function (v) { schema.LeafMediaType = v; })));
@@ -1343,15 +1392,46 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             container.appendChild(buildMappingRow(schema.OverviewField, mapperConnId, schema.Id, 'Overview field', null, locked, 'OverviewField'));
             container.appendChild(buildMappingRow(schema.PosterUrlField, mapperConnId, schema.Id, 'Poster URL field', null, locked, 'PosterUrlField'));
 
-            if (schema.ObjectKind === 'MusicArtistAlbum') {
-                container.appendChild(buildMappingRow(schema.ArtistField, mapperConnId, schema.Id, 'Artist field', null, locked, null));
-                container.appendChild(buildMappingRow(schema.AlbumArtistField, mapperConnId, schema.Id, 'Album artist field', null, locked, null));
-                container.appendChild(buildMappingRow(schema.AlbumField, mapperConnId, schema.Id, 'Album field', null, locked, null));
+            if (schema.Presentation === 'PlayableItemsAsEpisodes') {
+                var showHeading = document.createElement('h3');
+                showHeading.innerText = 'Show grouping';
+                container.appendChild(showHeading);
+                container.appendChild(buildMappingRow(schema.ShowIdentityField, mapperConnId, schema.Id, 'Show identity field',
+                    'Required. Rows with the same resolved value become episodes of the same Show.', locked, 'ShowIdentityField'));
+                container.appendChild(buildMappingRow(schema.ShowTitleField, mapperConnId, schema.Id, 'Show title field', 'Required.', locked, 'ShowTitleField'));
+                container.appendChild(buildMappingRow(schema.ShowOverviewField, mapperConnId, schema.Id, 'Show overview field', null, locked, 'ShowOverviewField'));
+                container.appendChild(buildMappingRow(schema.ShowPosterUrlField, mapperConnId, schema.Id, 'Show poster URL field', null, locked, 'ShowPosterUrlField'));
+
+                var seasonHeading = document.createElement('h3');
+                seasonHeading.innerText = 'Season grouping';
+                container.appendChild(seasonHeading);
+                container.appendChild(buildMappingRow(schema.SeasonNumberField, mapperConnId, schema.Id, 'Season number field',
+                    'Rows are grouped by Show identity plus this number. Blank defaults to Season 1.', locked, 'SeasonNumberField'));
+                container.appendChild(buildMappingRow(schema.SeasonTitleField, mapperConnId, schema.Id, 'Season title field',
+                    'Optional. Defaults to Season {number}.', locked, 'SeasonTitleField'));
+                container.appendChild(buildMappingRow(schema.EpisodeNumberField, mapperConnId, schema.Id, 'Episode number field', null, locked, 'EpisodeNumberField'));
             }
 
-            if (schema.ObjectKind === 'PhotoAlbum') {
-                container.appendChild(buildMappingRow(schema.MediaFileUrlField, mapperConnId, schema.Id, 'Media file URL field',
-                    'The actual image file URL -- distinct from Poster URL, which is a thumbnail. Same build-a-URL-from-pieces approach as Poster URL field above, if the source doesn\'t already return a ready-to-use URL.', locked, null));
+            if ((schema.ObjectKind === 'FlatMedia' && schema.LeafMediaType === 'Audio') || schema.ObjectKind === 'MusicArtistAlbum') {
+                container.appendChild(buildMappingRow(schema.ArtistField, mapperConnId, schema.Id, 'Artist field', null, locked, 'ArtistField'));
+                container.appendChild(buildMappingRow(schema.AlbumArtistField, mapperConnId, schema.Id, 'Album artist field', null, locked, 'AlbumArtistField'));
+                container.appendChild(buildMappingRow(schema.AlbumField, mapperConnId, schema.Id, 'Album field', null, locked, 'AlbumField'));
+            }
+
+            if (schema.Presentation === 'MusicCatalogueExperimental') {
+                container.appendChild(buildMappingRow(schema.ArtistIdentityField, mapperConnId, schema.Id, 'Artist identity field',
+                    'Required for deterministic grouping. Rows with the same value share an Artist.', locked, 'ArtistIdentityField'));
+                container.appendChild(buildMappingRow(schema.AlbumIdentityField, mapperConnId, schema.Id, 'Album identity field',
+                    'Required for deterministic grouping within an Artist.', locked, 'AlbumIdentityField'));
+            }
+
+            if (schema.ObjectKind !== 'DisplayCard') {
+                container.appendChild(buildMappingRow(schema.MediaFileUrlField, mapperConnId, schema.Id, 'Media item URL / path',
+                    schema.ObjectKind === 'PhotoAlbum'
+                        ? 'Required for photos. This is the full image opened in the slideshow; Poster URL is only album artwork.'
+                        : (schema.LeafMediaType === 'Audio'
+                            ? 'Required for audio. Map the playable track URL or local path; source tags may supplement Emby metadata.'
+                            : 'Optional playable video URL or local path. Leave blank to use the bundled Coming Soon video.'), locked, 'MediaFileUrlField'));
             }
 
             if (schema.ObjectKind === 'GenericContainer') {
@@ -1376,6 +1456,17 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 container.appendChild(buildProviderIdFieldsEditor(view, schema, mapperConnId, locked));
             }
 
+            if (schema.Presentation === 'PlayableItemsAsEpisodes' || schema.Presentation === 'ShowsWithComingSoonEpisode') {
+                container.appendChild(buildScopedProviderIdFieldsEditor(view, schema, 'SeriesProviderIdFields', 'Show provider IDs', mapperConnId, locked));
+            }
+            if (schema.Presentation === 'PlayableItemsAsEpisodes') {
+                container.appendChild(buildScopedProviderIdFieldsEditor(view, schema, 'SeasonProviderIdFields', 'Season provider IDs', mapperConnId, locked));
+            }
+            if (schema.Presentation === 'MusicCatalogueExperimental') {
+                container.appendChild(buildScopedProviderIdFieldsEditor(view, schema, 'ArtistProviderIdFields', 'Artist provider IDs', mapperConnId, locked));
+                container.appendChild(buildScopedProviderIdFieldsEditor(view, schema, 'AlbumProviderIdFields', 'Album provider IDs', mapperConnId, locked));
+            }
+
             if (lastArrayCandidatesBySchemaId[schema.Id] && lastArrayCandidatesBySchemaId[schema.Id].length) {
                 renderArrayCandidates(
                     view,
@@ -1388,6 +1479,68 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             refreshSchemaDirtyState(view);
         }
 
+        function buildScopedProviderIdFieldsEditor(view, schema, propertyName, title, mapperConnId, locked) {
+            if (!schema[propertyName]) schema[propertyName] = {};
+            var fields = schema[propertyName];
+            var wrap = document.createElement('div');
+            wrap.className = 'esInlineSettings';
+            var heading = document.createElement('label');
+            heading.innerText = title;
+            wrap.appendChild(heading);
+
+            Object.keys(fields).forEach(function (key) {
+                var block = document.createElement('div');
+                block.className = 'esProviderIdBlock';
+                var keyInput = esTextInput(key, locked, function (newKey) {
+                    if (!newKey || newKey === key || fields.hasOwnProperty(newKey)) return;
+                    fields[newKey] = fields[key];
+                    delete fields[key];
+                    markSchemasDirty(view);
+                    renderSchemaForm(view);
+                });
+                block.appendChild(esLabeledRow('Provider name', keyInput, 'For example Tvdb, Tmdb or Imdb. This ID is applied only to the ' + title.replace(' provider IDs', '') + ' object.'));
+                block.appendChild(buildMappingRow(fields[key], mapperConnId, schema.Id, 'Value', null, locked, null));
+                if (!schema.BadgeEnabledProviderIdKeys) schema.BadgeEnabledProviderIdKeys = [];
+                var badge = document.createElement('label');
+                var badgeInput = document.createElement('input');
+                badgeInput.type = 'checkbox';
+                badgeInput.disabled = !!locked;
+                badgeInput.checked = schema.BadgeEnabledProviderIdKeys.indexOf(key) >= 0;
+                badgeInput.addEventListener('change', function (e) {
+                    var index = schema.BadgeEnabledProviderIdKeys.indexOf(key);
+                    if (e.target.checked && index < 0) schema.BadgeEnabledProviderIdKeys.push(key);
+                    if (!e.target.checked && index >= 0) schema.BadgeEnabledProviderIdKeys.splice(index, 1);
+                    markSchemasDirty(view);
+                });
+                badge.appendChild(badgeInput);
+                badge.appendChild(document.createTextNode(' Show as clickable badge'));
+                block.appendChild(badge);
+                if (!locked) {
+                    var remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.innerText = 'Remove';
+                    remove.addEventListener('click', function () { delete fields[key]; markSchemasDirty(view); renderSchemaForm(view); });
+                    block.appendChild(remove);
+                }
+                wrap.appendChild(block);
+            });
+
+            if (!locked) {
+                var add = document.createElement('button');
+                add.type = 'button';
+                add.innerText = 'Add ' + title.replace(' IDs', ' ID');
+                add.addEventListener('click', function () {
+                    var n = 1, key = 'ProviderId';
+                    while (fields.hasOwnProperty(key)) key = 'ProviderId' + (++n);
+                    fields[key] = { Segments: [] };
+                    markSchemasDirty(view);
+                    renderSchemaForm(view);
+                });
+                wrap.appendChild(add);
+            }
+            return wrap;
+        }
+
         function buildProviderIdFieldsEditor(view, schema, mapperConnId, locked) {
             if (!schema.ProviderIdFields) schema.ProviderIdFields = {};
             if (!schema.BadgeEnabledProviderIdKeys) schema.BadgeEnabledProviderIdKeys = [];
@@ -1397,7 +1550,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             wrap.style.marginBottom = '0.9em';
 
             var label = document.createElement('label');
-            label.innerText = 'Provider ID fields';
+            label.innerText = 'Row item provider IDs';
             label.style.display = 'block';
             label.style.marginBottom = '0.3em';
             wrap.appendChild(label);
@@ -1452,7 +1605,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 keyInput.value = key;
                 keyInput.placeholder = 'e.g. Tmdb';
                 keyInput.disabled = !!locked;
-                keyInput.title = 'Stored under this name in ProviderIds. Some names (Tmdb, Imdb) are already recognised with a built-in Emby badge; any other name still works internally, it just needs the Badge toggle here to also show one.';
+                keyInput.title = 'Applied to the object represented by each row (Movie, Video, Track, Photo or Episode). Show, Season, Artist and Album IDs have their own scoped sections.';
                 keyInput.addEventListener('change', function (e) {
                     var newKey = e.target.value;
                     if (!newKey || newKey === key || schema.ProviderIdFields.hasOwnProperty(newKey)) { e.target.value = key; return; }
@@ -1768,10 +1921,17 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     'IdentityField', 'TitleField', 'OriginalTitleField',
                     'YearField', 'OverviewField', 'PosterUrlField'
                 ];
-                if (schema.ObjectKind === 'MusicArtistAlbum') {
+                if ((schema.ObjectKind === 'FlatMedia' && schema.LeafMediaType === 'Audio') || schema.ObjectKind === 'MusicArtistAlbum') {
                     applicableRoles = applicableRoles.concat(['ArtistField', 'AlbumArtistField', 'AlbumField']);
                 }
-                if (schema.ObjectKind === 'PhotoAlbum') applicableRoles.push('MediaFileUrlField');
+                if (schema.ObjectKind !== 'DisplayCard') applicableRoles.push('MediaFileUrlField');
+                if (schema.Presentation === 'PlayableItemsAsEpisodes') {
+                    applicableRoles = applicableRoles.concat(['ShowIdentityField', 'ShowTitleField', 'ShowOverviewField',
+                        'ShowPosterUrlField', 'SeasonNumberField', 'SeasonTitleField', 'EpisodeNumberField']);
+                }
+                if (schema.Presentation === 'MusicCatalogueExperimental') {
+                    applicableRoles = applicableRoles.concat(['ArtistIdentityField', 'AlbumIdentityField']);
+                }
 
                 applicableRoles.forEach(function (role) {
                     if (!schema[role]) schema[role] = { Segments: [] };
@@ -2226,6 +2386,28 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var affectedFolders = 0;
 
             var currentSchema = store.currentSchema();
+            function mapped(field) { return !!(field && field.Segments && field.Segments.length); }
+            var requiredMessage = '';
+            if (currentSchema && (!mapped(currentSchema.IdentityField) || !mapped(currentSchema.TitleField))) {
+                requiredMessage = 'Identity and Title mappings are required.';
+            } else if (currentSchema && currentSchema.Presentation === 'PlayableItemsAsEpisodes' &&
+                (!mapped(currentSchema.ShowIdentityField) || !mapped(currentSchema.ShowTitleField))) {
+                requiredMessage = 'Playable items as episodes requires Show identity and Show title mappings.';
+            } else if (currentSchema && currentSchema.Presentation === 'MusicCatalogueExperimental' &&
+                (!mapped(currentSchema.ArtistIdentityField) || !mapped(currentSchema.ArtistField) ||
+                 !mapped(currentSchema.AlbumIdentityField) || !mapped(currentSchema.AlbumField) || !mapped(currentSchema.MediaFileUrlField))) {
+                requiredMessage = 'Music catalogue requires Artist identity/name, Album identity/title, and Media item mappings.';
+            } else if (currentSchema && currentSchema.Presentation === 'AudioTracks' && !mapped(currentSchema.MediaFileUrlField)) {
+                requiredMessage = 'Audio tracks require a Media item URL/path mapping.';
+            } else if (currentSchema && currentSchema.Presentation === 'PhotoCollection' &&
+                !mapped(currentSchema.MediaFileUrlField) && !mapped(currentSchema.PosterUrlField)) {
+                requiredMessage = 'Photo collection requires a Media item URL/path (or Poster URL fallback) mapping.';
+            }
+            if (requiredMessage) {
+                Dashboard.alert(requiredMessage);
+                status.innerText = 'Save cancelled.';
+                return;
+            }
             var invalidFunctionNodes = collectInvalidFunctionNodes(currentSchema ? [currentSchema] : []);
             if (invalidFunctionNodes.length > 0) {
                 var invalidChip = view.querySelector('.esMapSeg-function[data-map-node-valid="0"]');

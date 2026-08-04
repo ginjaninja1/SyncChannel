@@ -12,6 +12,10 @@
     using System.Threading;
     using System;
     using System.Threading.Tasks;
+    using System.IO;
+    using MediaBrowser.Common.Configuration;
+    using MediaBrowser.Common.Net;
+    using MediaBrowser.Model.Net;
 
     // ---- Connections ----
     [Route("/ChannelSync/Connections", "GET")] public class GetConnections : IReturn<ConnectionsFile> { }
@@ -44,6 +48,21 @@
     // ---- Folder tree ----
     [Route("/ChannelSync/FolderTree", "GET")] public class GetFolderTree : IReturn<FolderTreeFile> { }
     [Route("/ChannelSync/FolderTree", "POST")] public class SaveFolderTree : IReturn<object> { public FolderNode RootFolder { get; set; } }
+
+    // ---- Opt-in runtime media compatibility harness ----
+    [Route("/ChannelSync/MediaTestHarness", "GET")]
+    public class GetMediaTestHarness : IReturn<object> { }
+
+    [Route("/ChannelSync/MediaTestHarness", "POST")]
+    public class SaveMediaTestHarness : IReturn<object>
+    {
+        public bool Enabled { get; set; }
+        public string VideoUrl { get; set; }
+        public string AudioUrl { get; set; }
+        public string ImageUrl { get; set; }
+        public string HlsUrl { get; set; }
+        public bool RunNow { get; set; }
+    }
 
     // ---- Connection reachability test. Tests the LIVE field values sent
     // from the browser, not whatever's on disk — so it works before Save
@@ -115,6 +134,8 @@
         private readonly FolderTreeSyncTask syncTask;
         private readonly Services.ChannelIdentityReconciler reconciler;
         private readonly ILogger logger;
+        private readonly IApplicationPaths appPaths;
+        private readonly IHttpClient httpClient;
 
         public ChannelSyncApiSurface(
             ConnectionsStore connectionsStore,
@@ -126,6 +147,8 @@
             LastResponseCacheStore lastResponseStore,
             FolderTreeSyncTask syncTask,
             Services.ChannelIdentityReconciler reconciler,
+            IApplicationPaths appPaths,
+            IHttpClient httpClient,
             ILogger logger)
         {
             this.connectionsStore = connectionsStore;
@@ -137,6 +160,8 @@
             this.lastResponseStore = lastResponseStore;
             this.syncTask = syncTask;
             this.reconciler = reconciler;
+            this.appPaths = appPaths;
+            this.httpClient = httpClient;
             this.logger = logger;
         }
 
@@ -526,6 +551,69 @@
         }
 
         public object Get(GetFolderTree r) => treeStore.Load();
+
+        public object Get(GetMediaTestHarness r)
+        {
+            var cfg = SyncChannelPlugin.Instance.Configuration;
+            return new
+            {
+                Enabled = cfg.EnableMediaTestHarness,
+                VideoUrl = cfg.MediaTestVideoUrl,
+                AudioUrl = cfg.MediaTestAudioUrl,
+                ImageUrl = cfg.MediaTestImageUrl,
+                HlsUrl = cfg.MediaTestHlsUrl
+            };
+        }
+
+        public async Task<object> Post(SaveMediaTestHarness r)
+        {
+            var plugin = SyncChannelPlugin.Instance;
+            var cfg = plugin.Configuration;
+            cfg.EnableMediaTestHarness = r.Enabled;
+            cfg.MediaTestVideoUrl = (r.VideoUrl ?? string.Empty).Trim();
+            cfg.MediaTestAudioUrl = (r.AudioUrl ?? string.Empty).Trim();
+            cfg.MediaTestImageUrl = (r.ImageUrl ?? string.Empty).Trim();
+            cfg.MediaTestHlsUrl = (r.HlsUrl ?? string.Empty).Trim();
+
+            string imageError = null;
+            if (r.Enabled && !string.IsNullOrWhiteSpace(cfg.MediaTestImageUrl))
+            {
+                try
+                {
+                    cfg.MediaTestCachedImagePath = await DownloadMediaTestImage(cfg.MediaTestImageUrl).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    cfg.MediaTestCachedImagePath = string.Empty;
+                    imageError = ex.Message;
+                    logger.ErrorException("ChannelSync: Media test image download failed for {0}", ex, cfg.MediaTestImageUrl);
+                }
+            }
+            plugin.UpdateConfiguration(cfg);
+
+            if (r.RunNow)
+            {
+                logger.Info("ChannelSync: Media compatibility harness changed — running a full sync now.");
+                _ = syncTask.Execute(CancellationToken.None, new Progress<double>());
+            }
+
+            return new { Success = true, ImageError = imageError };
+        }
+
+        private async Task<string> DownloadMediaTestImage(string url)
+        {
+            var directory = Path.Combine(appPaths.DataPath, "channel-sync", "media-tests");
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, "photo-source.jpg");
+            var options = new HttpRequestOptions { Url = url, CancellationToken = CancellationToken.None };
+            using (var response = await httpClient.GetResponse(options).ConfigureAwait(false))
+            using (var source = response.Content)
+            using (var destination = File.Create(path))
+            {
+                await source.CopyToAsync(destination).ConfigureAwait(false);
+            }
+            return path;
+        }
 
         public object Post(SaveFolderTree r)
         {

@@ -91,12 +91,51 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // module initialize itself off that store. Nothing here knows how
         // any individual tab renders.
         // ===================================================================
+        function initMediaTests(view, settings) {
+            settings = settings || {};
+            view.querySelector('#mtEnabled').checked = !!settings.Enabled;
+            view.querySelector('#mtVideoUrl').value = settings.VideoUrl || '';
+            view.querySelector('#mtAudioUrl').value = settings.AudioUrl || '';
+            view.querySelector('#mtImageUrl').value = settings.ImageUrl || '';
+            view.querySelector('#mtHlsUrl').value = settings.HlsUrl || '';
+
+            view.querySelector('#mtSaveRun').addEventListener('click', function () {
+                var button = view.querySelector('#mtSaveRun');
+                var status = view.querySelector('#mtStatus');
+                button.disabled = true;
+                status.innerText = 'Saving and starting channel refresh…';
+                ApiClient.ajax({
+                    type: 'POST',
+                    url: ApiClient.getUrl('ChannelSync/MediaTestHarness'),
+                    contentType: 'application/json',
+                    dataType: 'json',
+                    data: JSON.stringify({
+                        Enabled: view.querySelector('#mtEnabled').checked,
+                        VideoUrl: view.querySelector('#mtVideoUrl').value,
+                        AudioUrl: view.querySelector('#mtAudioUrl').value,
+                        ImageUrl: view.querySelector('#mtImageUrl').value,
+                        HlsUrl: view.querySelector('#mtHlsUrl').value,
+                        RunNow: true
+                    })
+                }).then(function (result) {
+                    status.innerText = result && result.ImageError
+                        ? 'Saved, but the test image could not be cached: ' + result.ImageError
+                        : 'Saved. Channel refresh started; open Media Tests after it completes.';
+                    button.disabled = false;
+                }).catch(function () {
+                    status.innerText = 'Save failed — see the Emby server log.';
+                    button.disabled = false;
+                });
+            });
+        }
+
         function loadAll(view) {
             Promise.all([
                 ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/Connections'), dataType: 'json' }),
                 ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/EndpointSchemas'), dataType: 'json' }),
                 ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/RuleSets'), dataType: 'json' }),
-                ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/FolderTree'), dataType: 'json' })
+                ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/FolderTree'), dataType: 'json' }),
+                ApiClient.ajax({ type: 'GET', url: ApiClient.getUrl('ChannelSync/MediaTestHarness'), dataType: 'json' })
             ]).then(function (results) {
                 var connections = (results[0] && results[0].Connections) || [];
                 var persistedConnectionIds = {};
@@ -117,6 +156,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 schemaEditorTab.init(view);
                 ruleSetManagerTab.init(view);
                 folderTreeTab.init(view);
+                initMediaTests(view, results[4]);
 
                 editorSession.register('connections', 'Connections', connectionsTab.hasUnsavedChanges, connectionsTab.isSaving);
                 editorSession.register('schemas', 'Endpoint Schemas', schemaEditorTab.hasUnsavedChanges, schemaEditorTab.isSaving);

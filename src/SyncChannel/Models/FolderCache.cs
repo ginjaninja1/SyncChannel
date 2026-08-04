@@ -37,6 +37,8 @@ namespace SyncChannel.Models
         // ChannelObjectKind. Carried from the EndpointSchema that produced
         // it (FolderTreeSyncTask.ToCache) through to SyncFolderChannel.
         public ChannelObjectKind ObjectKind { get; set; }
+        public PresentationProfile Presentation { get; set; }
+        public string FetchDisplayName { get; set; } = string.Empty;
 
         // Copied from EndpointSchema at ToCache time, alongside ObjectKind,
         // so SyncFolderChannel can construct the right ChannelItemInfo
@@ -65,10 +67,23 @@ namespace SyncChannel.Models
         public string AlbumArtist { get; set; } = string.Empty;
         public string Album { get; set; } = string.Empty;
 
-        // PhotoAlbum kind only — see FetchedItem for the source of this.
+        // Playable/viewable source for every media-bearing destination.
         public string MediaFileUrl { get; set; } = string.Empty;
+        public string ShowIdentity { get; set; } = string.Empty;
+        public string ShowTitle { get; set; } = string.Empty;
+        public string ShowOverview { get; set; } = string.Empty;
+        public string ShowPosterUrl { get; set; } = string.Empty;
+        public int? SeasonNumber { get; set; }
+        public string SeasonTitle { get; set; } = string.Empty;
+        public int? EpisodeNumber { get; set; }
+        public string ArtistIdentity { get; set; } = string.Empty;
+        public string AlbumIdentity { get; set; } = string.Empty;
 
         public Dictionary<string, string> ProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> SeriesProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> SeasonProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> ArtistProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> AlbumProviderIds { get; set; } = new Dictionary<string, string>();
     }
 
     public class FolderCache

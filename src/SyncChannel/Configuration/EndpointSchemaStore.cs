@@ -196,7 +196,10 @@
             DisplayName = "Movies",
             IsBuiltIn = true,
             ConnectionId = connectionId,
+            Presentation = PresentationProfile.Movies,
             ObjectKind = ChannelObjectKind.FlatMedia,
+            LeafMediaType = LeafMediaType.Video,
+            LeafContentType = LeafContentType.Movie,
             Path = "/api/v3/movie",
             IdentityField = Field("titleSlug"),
             TitleField = Field("title"),
@@ -247,7 +250,10 @@
             DisplayName = "Series",
             IsBuiltIn = true,
             ConnectionId = connectionId,
+            Presentation = PresentationProfile.ShowsWithComingSoonEpisode,
             ObjectKind = ChannelObjectKind.Series,
+            LeafMediaType = LeafMediaType.Video,
+            LeafContentType = LeafContentType.Episode,
             Path = "/api/v3/series",
             IdentityField = Field("titleSlug"),
             TitleField = Field("title"),
@@ -255,7 +261,7 @@
             YearField = Field("year"),
             OverviewField = Field("overview"),
             PosterUrlField = ArrayMatchField("images.remoteUrl", "coverType", "poster"),
-            ProviderIdFields = new Dictionary<string, FieldMapping>
+            SeriesProviderIdFields = new Dictionary<string, FieldMapping>
             {
                 ["Tvdb"] = Field("tvdbId"),
                 ["SonarrId"] = ItemUrl("/series/", "titleSlug")

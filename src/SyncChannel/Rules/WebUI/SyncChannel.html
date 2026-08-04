@@ -370,6 +370,7 @@
 				<button type="button" class="mcsTabBtn" data-tab="schemas" role="tab" aria-selected="false" aria-controls="tab-schemas">2. Endpoint Schemas</button>
 				<button type="button" class="mcsTabBtn" data-tab="ruleSets" role="tab" aria-selected="false" aria-controls="tab-ruleSets">3. Rule Sets</button>
 				<button type="button" class="mcsTabBtn" data-tab="tree" role="tab" aria-selected="false" aria-controls="tab-tree">4. Folder Tree</button>
+				<button type="button" class="mcsTabBtn" data-tab="mediaTests" role="tab" aria-selected="false" aria-controls="tab-mediaTests">Media Tests (Dev only)</button>
 			</div>
 
 			<!-- ================= Connections tab ================= -->
@@ -571,6 +572,36 @@
 					<button is="emby-button" type="button" id="ftDiscardBtn" class="raised">Discard</button>
 					<span id="ftDirtyWarning" style="color:#e0a030;"></span>
 					<span id="ftStatus"></span>
+				</div>
+			</div>
+
+			<!-- ================= Runtime media compatibility harness ================= -->
+			<div id="tab-mediaTests" class="mcsTab">
+				<h2>Runtime Media Compatibility Tests</h2>
+				<div class="fieldDescription" style="max-width:60em; margin-bottom:1em;">
+					<b>Development only.</b> This opt-in harness creates real items under a reserved <b>Media Tests</b> folder in the channel. Disable it after testing to remove the folder on the next refresh.
+				</div>
+				<label style="display:block; margin-bottom:1em;"><input type="checkbox" id="mtEnabled"> Enable the Media Tests channel folder</label>
+				<div style="max-width:60em;">
+					<label style="display:block; margin-bottom:0.8em;">HTTPS MP4 URL
+						<input type="text" id="mtVideoUrl" style="display:block; width:100%; box-sizing:border-box; margin-top:0.3em;">
+					</label>
+					<label style="display:block; margin-bottom:0.8em;">HTTPS audio URL
+						<input type="text" id="mtAudioUrl" style="display:block; width:100%; box-sizing:border-box; margin-top:0.3em;">
+					</label>
+					<label style="display:block; margin-bottom:0.8em;">Image URL
+						<input type="text" id="mtImageUrl" style="display:block; width:100%; box-sizing:border-box; margin-top:0.3em;">
+					</label>
+					<label style="display:block; margin-bottom:0.8em;">HLS playlist URL
+						<input type="text" id="mtHlsUrl" style="display:block; width:100%; box-sizing:border-box; margin-top:0.3em;">
+					</label>
+				</div>
+				<div style="display:flex; align-items:center; gap:1em; margin-top:1em;">
+					<button is="emby-button" type="button" id="mtSaveRun" class="raised button-submit">Save and Refresh Channel</button>
+					<span id="mtStatus"></span>
+				</div>
+				<div class="fieldDescription" style="margin-top:1.2em; max-width:60em;">
+					The default URLs are third-party public test fixtures and are used only while this harness is enabled. The image is downloaded into Channel Sync's persistent cache because Emby Photos require a local Path. A successful save starts the normal Channel Sync and Emby channel-refresh workflow; wait for it to finish, then open the channel's Media Tests folder.
 				</div>
 			</div>
 

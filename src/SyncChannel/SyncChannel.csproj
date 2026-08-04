@@ -4,7 +4,7 @@
 		<AssemblyName>Emby.SyncChannel</AssemblyName>
 		<RootNamespace>SyncChannel</RootNamespace>
 		<LangVersion>latest</LangVersion>
-		<Version>0.0.0.9</Version>
+		<Version>0.0.0.13</Version>
 	</PropertyGroup>
 	<ItemGroup>
 		<Compile Remove="Channels\RadarrComingSoonChannel.cs" />
@@ -76,7 +76,7 @@
 	<!-- Optional: auto-copy the DLL to your plugins folder after build.
 	     Uncomment and set your own destination path. -->
 
-	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
+	<Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(SkipPluginDeploy)' != 'true'">
 		<Exec Command="xcopy &quot;$(TargetPath)&quot; &quot;\\x670e\C\Users\Nicholas Bird\AppData\Roaming\Emby-Server\programdata\plugins\&quot; /Y" />
 	</Target>
 

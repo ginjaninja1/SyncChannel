@@ -69,6 +69,22 @@ namespace SyncChannel.Configuration
     //                      Music/Photo-like.
     public enum ChannelObjectKind { FlatMedia, Series, MusicArtistAlbum, PhotoAlbum, GenericContainer, DisplayCard }
 
+    // User-facing, deterministic transformations. Unlike ChannelObjectKind,
+    // this states both what one response row means and how the complete fetch
+    // result is presented. ChannelObjectKind remains an internal construction
+    // detail while the pre-release schema format is replaced.
+    public enum PresentationProfile
+    {
+        Movies,
+        ShowsWithComingSoonEpisode,
+        PlayableItemsAsEpisodes,
+        Videos,
+        AudioTracks,
+        MusicCatalogueExperimental,
+        PhotoCollection,
+        NestedMedia
+    }
+
     // DisplayCard: a picture + name, nothing underneath, nothing to play.
     // Built as Type=Media/MediaType=Video/ContentType=Trailer (see
     // SyncFolderChannel.BuildDisplayCardItem), which Emby's ChannelManager
@@ -225,8 +241,10 @@ namespace SyncChannel.Configuration
         // fetch/evaluation code — a user-authored schema works identically.
         public bool IsBuiltIn { get; set; }
 
-        // Which Emby channel object this schema's items become. See
-        // ChannelObjectKind above.
+        public PresentationProfile Presentation { get; set; } = PresentationProfile.Movies;
+
+        // Internal Emby construction settings. These are derived from
+        // Presentation by the editor/built-ins and are not user-facing.
         public ChannelObjectKind ObjectKind { get; set; }
 
         // FlatMedia / MusicArtistAlbum's leaf / GenericContainer's leaf only.
@@ -297,12 +315,28 @@ namespace SyncChannel.Configuration
         public FieldMapping AlbumArtistField { get; set; } = new FieldMapping();
         public FieldMapping AlbumField { get; set; } = new FieldMapping();
 
-        // PhotoAlbum only — the actual image file URL, distinct from
-        // PosterUrlField (which is a thumbnail/cover, set via ImageUrl).
-        // Confirmed via ILSpy: Photo.Path is set from
-        // info.MediaSources.FirstOrDefault()?.Path, not from ImageUrl —
-        // this field is what gets turned into that MediaSourceInfo. Same
-        // "mapping IS the template" replacement as PosterUrlField above.
+        // Grouping/metadata for profiles where one row is below a Series.
+        // PlayableItemsAsEpisodes requires ShowIdentity + ShowTitle; rows are
+        // grouped by ShowIdentity, then by SeasonNumber (default 1).
+        public FieldMapping ShowIdentityField { get; set; } = new FieldMapping();
+        public FieldMapping ShowTitleField { get; set; } = new FieldMapping();
+        public FieldMapping ShowOverviewField { get; set; } = new FieldMapping();
+        public FieldMapping ShowPosterUrlField { get; set; } = new FieldMapping();
+        public FieldMapping SeasonNumberField { get; set; } = new FieldMapping();
+        public FieldMapping SeasonTitleField { get; set; } = new FieldMapping();
+        public FieldMapping EpisodeNumberField { get; set; } = new FieldMapping();
+
+        // Stable grouping keys for the experimental row-is-track catalogue.
+        public FieldMapping ArtistIdentityField { get; set; } = new FieldMapping();
+        public FieldMapping AlbumIdentityField { get; set; } = new FieldMapping();
+
+        // The actual playable/viewable media URL or local path, distinct
+        // from PosterUrlField (thumbnail/cover artwork). Video/audio use
+        // IRequiresMediaInfoCallback so an unprobed remote source can play
+        // on its first attempt; Photo requires a persisted MediaSourceInfo
+        // because Emby copies its Path while constructing the Photo item.
+        // Blank means "use the bundled coming-soon video" for video
+        // destinations. Audio destinations require a real mapped source.
         public FieldMapping MediaFileUrlField { get; set; } = new FieldMapping();
 
         // Extra dotted paths, beyond the display fields above, surfaced as
@@ -312,6 +346,14 @@ namespace SyncChannel.Configuration
         // schema populates these through the identical mechanism a
         // custom schema would, rather than a privileged shortcut.
         public Dictionary<string, FieldMapping> ProviderIdFields { get; set; } = new Dictionary<string, FieldMapping>();
+
+        // Provider IDs are scoped to the object they identify. Item is the
+        // row-level Movie/Video/Track/Photo/Episode. Series/Season/Artist/
+        // Album apply only when the selected presentation creates them.
+        public Dictionary<string, FieldMapping> SeriesProviderIdFields { get; set; } = new Dictionary<string, FieldMapping>();
+        public Dictionary<string, FieldMapping> SeasonProviderIdFields { get; set; } = new Dictionary<string, FieldMapping>();
+        public Dictionary<string, FieldMapping> ArtistProviderIdFields { get; set; } = new Dictionary<string, FieldMapping>();
+        public Dictionary<string, FieldMapping> AlbumProviderIdFields { get; set; } = new Dictionary<string, FieldMapping>();
 
         // Provider-id keys (from ProviderIdFields, above) opted in to get a
         // clickable badge in Emby's edit-metadata UI. Backed by a fixed pool

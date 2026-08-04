@@ -39,19 +39,37 @@ namespace SyncChannel.Channels
         // synthetic layer the way Series/Music do.
         private const string PhotoAlbumIdPrefix = "syncchannel-photoalbum-";
         private const string PhotoIdPrefix = "syncchannel-photo-";
+        private const string GenericLeafIdPrefix = "syncchannel-gcleaf-";
+        private const string FetchPhotoAlbumIdPrefix = "syncchannel-fetch-photoalbum-";
+        private const string GroupedSeriesIdPrefix = "syncchannel-group-series-";
+        private const string GroupedSeasonIdPrefix = "syncchannel-group-season-";
+        private const string GroupedEpisodeIdPrefix = "syncchannel-group-episode-";
+        private const string CatalogueArtistIdPrefix = "syncchannel-catalogue-artist-";
+        private const string CatalogueAlbumIdPrefix = "syncchannel-catalogue-album-";
+        private const string CatalogueTrackIdPrefix = "syncchannel-catalogue-track-";
 
         // GenericContainer kind — N admin-configured levels. Level is
         // encoded in the id itself ("syncchannel-container-{level}-...")
         // since depth is schema-defined per item, not fixed like the others.
         private const string ContainerIdPrefix = "syncchannel-container-";
 
-        // DisplayCard kind — a picture + name, nothing underneath, nothing
-        // to play. Built as Type=Media/MediaType=Video/ContentType=Trailer,
-        // which Emby's ChannelManager construction switch maps to a real
-        // Photo BaseItem (confirmed via ILSpy — see Evidence.md): a Photo
-        // IS its picture, so this reads as "just an image" cleanly, with
-        // no play button to error on click.
+        // Retained only for existing pre-release custom schemas. Live
+        // testing showed a standalone Photo receives slideshow semantics
+        // and is not a reliable generic information card.
         private const string CardIdPrefix = "syncchannel-card-";
+
+        private const string MediaTestFolderId = "syncchannel-media-tests";
+        private const string MediaTestSeriesId = "syncchannel-media-test-series";
+        private const string MediaTestStaticVideoId = "syncchannel-media-test-static-video";
+        private const string MediaTestDynamicVideoId = "syncchannel-media-test-dynamic-video";
+        private const string MediaTestAudioId = "syncchannel-media-test-audio";
+        private const string MediaTestHlsId = "syncchannel-media-test-hls";
+        private const string MediaTestPhotoAlbumId = "syncchannel-media-test-photoalbum";
+        private const string MediaTestPhotoOneId = "syncchannel-media-test-photo-one";
+        private const string MediaTestPhotoTwoId = "syncchannel-media-test-photo-two";
+        private const string MediaTestMovieId = "syncchannel-media-test-movie";
+        private const string MediaTestSeasonId = "syncchannel-media-test-season";
+        private const string MediaTestEpisodeId = "syncchannel-media-test-episode";
 
         private readonly FolderTreeStore treeStore;
         private readonly FolderCacheStore cacheStore;
@@ -97,6 +115,46 @@ namespace SyncChannel.Channels
 
         public Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
         {
+            if (query.FolderId != null && query.FolderId.StartsWith(FetchPhotoAlbumIdPrefix, StringComparison.Ordinal))
+            {
+                return Task.FromResult(BuildFetchPhotoListing(query.FolderId));
+            }
+            if (query.FolderId != null && query.FolderId.StartsWith(GroupedSeriesIdPrefix, StringComparison.Ordinal))
+                return Task.FromResult(BuildGroupedSeasonListing(query.FolderId));
+            if (query.FolderId != null && query.FolderId.StartsWith(GroupedSeasonIdPrefix, StringComparison.Ordinal))
+                return Task.FromResult(BuildGroupedEpisodeListing(query.FolderId));
+            if (query.FolderId != null && query.FolderId.StartsWith(CatalogueArtistIdPrefix, StringComparison.Ordinal))
+                return Task.FromResult(BuildCatalogueAlbumListing(query.FolderId));
+            if (query.FolderId != null && query.FolderId.StartsWith(CatalogueAlbumIdPrefix, StringComparison.Ordinal))
+                return Task.FromResult(BuildCatalogueTrackListing(query.FolderId));
+            if (string.Equals(query.FolderId, MediaTestFolderId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(SyncChannelPlugin.Instance.Configuration.EnableMediaTestHarness
+                    ? BuildMediaTestListing()
+                    : new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 });
+            }
+
+            if (string.Equals(query.FolderId, MediaTestSeriesId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(SyncChannelPlugin.Instance.Configuration.EnableMediaTestHarness
+                    ? BuildMediaTestSeriesListing()
+                    : new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 });
+            }
+
+            if (string.Equals(query.FolderId, MediaTestSeasonId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(SyncChannelPlugin.Instance.Configuration.EnableMediaTestHarness
+                    ? BuildMediaTestSeasonListing()
+                    : new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 });
+            }
+
+            if (string.Equals(query.FolderId, MediaTestPhotoAlbumId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(SyncChannelPlugin.Instance.Configuration.EnableMediaTestHarness
+                    ? BuildMediaTestPhotoListing()
+                    : new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 });
+            }
+
             // Synthetic-chain branches. Checked before the admin-folder-tree
             // logic below, since none of these ids ever correspond to a
             // FolderNode. Longer/more-specific prefixes are checked first
@@ -157,13 +215,84 @@ namespace SyncChannel.Channels
 
             var items = new List<ChannelItemInfo>();
 
+            if (targetNode.IsRoot && SyncChannelPlugin.Instance.Configuration.EnableMediaTestHarness)
+            {
+                items.Add(new ChannelItemInfo
+                {
+                    Id = MediaTestFolderId,
+                    Name = "Media Tests",
+                    Overview = "Opt-in Channel Sync runtime compatibility tests.",
+                    Type = ChannelItemType.Folder,
+                    FolderType = ChannelFolderType.Container,
+                    ImageUrl = SyncChannelPlugin.Instance.Configuration.MediaTestCachedImagePath,
+                    ForceUpdate = true
+                });
+            }
+
             foreach (var child in targetNode.Children)
             {
                 items.Add(BuildFolderItem(child));
             }
 
             var cache = cacheStore.Read(targetNode.Id);
-            foreach (var cached in cache.Items)
+            foreach (var photoFetch in cache.Items
+                .Where(i => i.Presentation == PresentationProfile.PhotoCollection)
+                .GroupBy(i => i.ProviderKey, StringComparer.OrdinalIgnoreCase))
+            {
+                var first = photoFetch.First();
+                items.Add(new ChannelItemInfo
+                {
+                    Id = FetchPhotoAlbumIdPrefix + targetNode.Id + "::" + first.ProviderKey,
+                    Name = string.IsNullOrWhiteSpace(first.FetchDisplayName) ? "Photos" : first.FetchDisplayName,
+                    Overview = "Photo collection generated from " + photoFetch.Count() + " fetched item(s).",
+                    Type = ChannelItemType.Folder,
+                    FolderType = ChannelFolderType.PhotoAlbum,
+                    ImageUrl = first.PosterUrl ?? first.MediaFileUrl,
+                    ForceUpdate = true
+                });
+            }
+
+            foreach (var show in cache.Items
+                .Where(i => i.Presentation == PresentationProfile.PlayableItemsAsEpisodes && !string.IsNullOrWhiteSpace(i.ShowIdentity))
+                .GroupBy(i => i.ProviderKey + "::" + i.ShowIdentity, StringComparer.OrdinalIgnoreCase))
+            {
+                var first = show.First();
+                var series = new ChannelItemInfo
+                {
+                    Id = GroupedSeriesIdPrefix + targetNode.Id + "::" + first.ProviderKey + "::" + first.ShowIdentity,
+                    Name = string.IsNullOrWhiteSpace(first.ShowTitle) ? first.ShowIdentity : first.ShowTitle,
+                    Overview = first.ShowOverview,
+                    ImageUrl = first.ShowPosterUrl,
+                    Type = ChannelItemType.Folder,
+                    FolderType = ChannelFolderType.Series,
+                    ForceUpdate = true
+                };
+                foreach (var providerId in first.SeriesProviderIds) series.ProviderIds[providerId.Key] = providerId.Value;
+                items.Add(series);
+            }
+
+            foreach (var artistRows in cache.Items
+                .Where(i => i.Presentation == PresentationProfile.MusicCatalogueExperimental && !string.IsNullOrWhiteSpace(i.ArtistIdentity))
+                .GroupBy(i => i.ProviderKey + "::" + i.ArtistIdentity, StringComparer.OrdinalIgnoreCase))
+            {
+                var first = artistRows.First();
+                var artist = new ChannelItemInfo
+                {
+                    Id = CatalogueArtistIdPrefix + targetNode.Id + "::" + first.ProviderKey + "::" + first.ArtistIdentity,
+                    Name = string.IsNullOrWhiteSpace(first.Artist) ? first.ArtistIdentity : first.Artist,
+                    ImageUrl = first.PosterUrl,
+                    Type = ChannelItemType.Folder,
+                    FolderType = ChannelFolderType.MusicArtist,
+                    ForceUpdate = true
+                };
+                foreach (var providerId in first.ArtistProviderIds) artist.ProviderIds[providerId.Key] = providerId.Value;
+                items.Add(artist);
+            }
+
+            foreach (var cached in cache.Items.Where(i =>
+                i.Presentation != PresentationProfile.PhotoCollection &&
+                i.Presentation != PresentationProfile.PlayableItemsAsEpisodes &&
+                i.Presentation != PresentationProfile.MusicCatalogueExperimental))
             {
                 var info = ToChannelItemInfo(cached, targetNode.Id, cache.StubVideoPath);
                 if (info != null)
@@ -179,8 +308,181 @@ namespace SyncChannel.Channels
             return Task.FromResult(new ChannelItemResult { Items = items, TotalRecordCount = items.Count });
         }
 
+        private ChannelItemResult BuildFetchPhotoListing(string albumId)
+        {
+            var payload = albumId.Substring(FetchPhotoAlbumIdPrefix.Length);
+            var folderId = ParseFolderNodeIdFromPayload(payload);
+            var fetchId = ParseStableIdFromPayload(payload);
+            var photos = new List<ChannelItemInfo>();
+            if (folderId == null || fetchId == null)
+            {
+                return new ChannelItemResult { Items = photos, TotalRecordCount = 0 };
+            }
+
+            foreach (var source in cacheStore.Read(folderId).Items.Where(i =>
+                i.Presentation == PresentationProfile.PhotoCollection &&
+                string.Equals(i.ProviderKey, fetchId, StringComparison.OrdinalIgnoreCase)))
+            {
+                var path = string.IsNullOrWhiteSpace(source.MediaFileUrl) ? source.PosterUrl : source.MediaFileUrl;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    logger.Warn("ChannelSync: Photo row '{0}' has no media item or poster URL and was omitted.", source.Title);
+                    continue;
+                }
+
+                var id = PhotoIdPrefix + folderId + "::" + source.ProviderKey + "::" + source.StableId;
+                var photo = new ChannelItemInfo
+                {
+                    Id = id,
+                    Name = source.Title,
+                    Overview = source.Overview,
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Video,
+                    ContentType = ChannelMediaContentType.Trailer,
+                    ForceUpdate = true,
+                    MediaSources = new List<MediaSourceInfo> { BuildRemoteOrLocalMediaSource(id, path) }
+                };
+                foreach (var providerId in source.ProviderIds) photo.ProviderIds[providerId.Key] = providerId.Value;
+                photos.Add(photo);
+            }
+
+            return new ChannelItemResult { Items = photos, TotalRecordCount = photos.Count };
+        }
+
+        private ChannelItemResult BuildGroupedSeasonListing(string seriesId)
+        {
+            var parts = seriesId.Substring(GroupedSeriesIdPrefix.Length).Split(new[] { "::" }, 3, StringSplitOptions.None);
+            if (parts.Length != 3) return new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 };
+            var rows = cacheStore.Read(parts[0]).Items.Where(i =>
+                i.Presentation == PresentationProfile.PlayableItemsAsEpisodes &&
+                string.Equals(i.ProviderKey, parts[1], StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.ShowIdentity, parts[2], StringComparison.OrdinalIgnoreCase));
+            var seasons = rows.GroupBy(i => i.SeasonNumber ?? 1).OrderBy(g => g.Key).Select(g =>
+            {
+                var first = g.First();
+                var season = new ChannelItemInfo
+                {
+                    Id = GroupedSeasonIdPrefix + parts[0] + "::" + parts[1] + "::" + parts[2] + "::" + g.Key,
+                    Name = string.IsNullOrWhiteSpace(first.SeasonTitle) ? "Season " + g.Key : first.SeasonTitle,
+                    Type = ChannelItemType.Folder,
+                    FolderType = ChannelFolderType.Season,
+                    IndexNumber = g.Key,
+                    ForceUpdate = true
+                };
+                foreach (var providerId in first.SeasonProviderIds) season.ProviderIds[providerId.Key] = providerId.Value;
+                return season;
+            }).ToList();
+            return new ChannelItemResult { Items = seasons, TotalRecordCount = seasons.Count };
+        }
+
+        private ChannelItemResult BuildGroupedEpisodeListing(string seasonId)
+        {
+            var parts = seasonId.Substring(GroupedSeasonIdPrefix.Length).Split(new[] { "::" }, 4, StringSplitOptions.None);
+            if (parts.Length != 4 || !int.TryParse(parts[3], out var seasonNumber))
+                return new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 };
+
+            var episodes = cacheStore.Read(parts[0]).Items.Where(i =>
+                i.Presentation == PresentationProfile.PlayableItemsAsEpisodes &&
+                string.Equals(i.ProviderKey, parts[1], StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.ShowIdentity, parts[2], StringComparison.OrdinalIgnoreCase) &&
+                (i.SeasonNumber ?? 1) == seasonNumber).Select(source =>
+            {
+                var episode = new ChannelItemInfo
+                {
+                    Id = GroupedEpisodeIdPrefix + parts[0] + "::" + source.ProviderKey + "::" + source.StableId,
+                    Name = source.Title,
+                    Overview = source.Overview,
+                    ImageUrl = source.PosterUrl,
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Video,
+                    ContentType = ChannelMediaContentType.Episode,
+                    IndexNumber = source.EpisodeNumber,
+                    ParentIndexNumber = seasonNumber,
+                    ForceUpdate = true
+                };
+                foreach (var providerId in source.ProviderIds) episode.ProviderIds[providerId.Key] = providerId.Value;
+                return episode;
+            }).ToList();
+            return new ChannelItemResult { Items = episodes, TotalRecordCount = episodes.Count };
+        }
+
+        private ChannelItemResult BuildCatalogueAlbumListing(string artistId)
+        {
+            var parts = artistId.Substring(CatalogueArtistIdPrefix.Length).Split(new[] { "::" }, 3, StringSplitOptions.None);
+            if (parts.Length != 3) return new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 };
+            var albums = cacheStore.Read(parts[0]).Items.Where(i =>
+                i.Presentation == PresentationProfile.MusicCatalogueExperimental &&
+                string.Equals(i.ProviderKey, parts[1], StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.ArtistIdentity, parts[2], StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(i.AlbumIdentity))
+                .GroupBy(i => i.AlbumIdentity, StringComparer.OrdinalIgnoreCase).Select(group =>
+                {
+                    var first = group.First();
+                    var album = new ChannelItemInfo
+                    {
+                        Id = CatalogueAlbumIdPrefix + parts[0] + "::" + parts[1] + "::" + parts[2] + "::" + first.AlbumIdentity,
+                        Name = string.IsNullOrWhiteSpace(first.Album) ? first.AlbumIdentity : first.Album,
+                        ImageUrl = first.PosterUrl,
+                        Type = ChannelItemType.Folder,
+                        FolderType = ChannelFolderType.MusicAlbum,
+                        ForceUpdate = true
+                    };
+                    foreach (var providerId in first.AlbumProviderIds) album.ProviderIds[providerId.Key] = providerId.Value;
+                    return album;
+                }).ToList();
+            return new ChannelItemResult { Items = albums, TotalRecordCount = albums.Count };
+        }
+
+        private ChannelItemResult BuildCatalogueTrackListing(string albumId)
+        {
+            var parts = albumId.Substring(CatalogueAlbumIdPrefix.Length).Split(new[] { "::" }, 4, StringSplitOptions.None);
+            if (parts.Length != 4) return new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 };
+            var tracks = cacheStore.Read(parts[0]).Items.Where(i =>
+                i.Presentation == PresentationProfile.MusicCatalogueExperimental &&
+                string.Equals(i.ProviderKey, parts[1], StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.ArtistIdentity, parts[2], StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(i.AlbumIdentity, parts[3], StringComparison.OrdinalIgnoreCase)).Select(source =>
+            {
+                var track = new ChannelItemInfo
+                {
+                    Id = CatalogueTrackIdPrefix + parts[0] + "::" + source.ProviderKey + "::" + source.StableId,
+                    Name = source.Title,
+                    Overview = source.Overview,
+                    ImageUrl = source.PosterUrl,
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Audio,
+                    ContentType = ChannelMediaContentType.Song,
+                    Artists = string.IsNullOrWhiteSpace(source.Artist) ? null : new List<string> { source.Artist },
+                    AlbumArtists = string.IsNullOrWhiteSpace(source.AlbumArtist) ? null : new List<string> { source.AlbumArtist },
+                    ForceUpdate = true
+                };
+                TrySetChannelItemAlbum(track, source.Album);
+                foreach (var providerId in source.ProviderIds) track.ProviderIds[providerId.Key] = providerId.Value;
+                return track;
+            }).ToList();
+            return new ChannelItemResult { Items = tracks, TotalRecordCount = tracks.Count };
+        }
+
         public Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
         {
+            if (string.Equals(id, MediaTestDynamicVideoId, StringComparison.Ordinal) ||
+                string.Equals(id, MediaTestEpisodeId, StringComparison.Ordinal))
+            {
+                var url = SyncChannelPlugin.Instance.Configuration.MediaTestVideoUrl;
+                return Task.FromResult<IEnumerable<MediaSourceInfo>>(
+                    string.IsNullOrWhiteSpace(url)
+                        ? Array.Empty<MediaSourceInfo>()
+                        : new[] { BuildRemoteMediaSource(id, url, "mp4", "Dynamic HTTPS MP4") });
+            }
+
+            if (id.StartsWith("syncchannel-media-test-", StringComparison.Ordinal))
+            {
+                // Static test items must remain genuinely static; returning
+                // callback media here would hide whether persisted
+                // ChannelItemInfo.MediaSources work on their own.
+                return Task.FromResult<IEnumerable<MediaSourceInfo>>(Array.Empty<MediaSourceInfo>());
+            }
+
             // Photo doesn't implement IHasMediaSources (confirmed via ILSpy)
             // — its Path is set directly from ChannelItemInfo.MediaSources at
             // creation time in GetChannelItemEntity, not via this callback.
@@ -190,11 +492,14 @@ namespace SyncChannel.Channels
                 return Task.FromResult<IEnumerable<MediaSourceInfo>>(Array.Empty<MediaSourceInfo>());
             }
 
-            string folderId = id.StartsWith(EpisodeIdPrefix, StringComparison.Ordinal)
-                ? ParseOwningFolderIdFromSyntheticId(id.Substring(EpisodeIdPrefix.Length))
-                : id.StartsWith(SongIdPrefix, StringComparison.Ordinal)
-                    ? ParseOwningFolderIdFromSyntheticId(id.Substring(SongIdPrefix.Length))
-                    : ParseItemOwningFolderId(id);
+            var cachedItem = FindCachedItemForMediaId(id, out var folderId);
+
+            if (cachedItem != null && !string.IsNullOrWhiteSpace(cachedItem.MediaFileUrl))
+            {
+                var mappedSource = BuildRemoteOrLocalMediaSource(id, cachedItem.MediaFileUrl);
+                mappedSource.Name = cachedItem.Title;
+                return Task.FromResult<IEnumerable<MediaSourceInfo>>(new[] { mappedSource });
+            }
 
             var stubVideoPath = folderId == null
                 ? string.Empty
@@ -211,14 +516,227 @@ namespace SyncChannel.Channels
                 return Task.FromResult<IEnumerable<MediaSourceInfo>>(Array.Empty<MediaSourceInfo>());
             }
 
-            // NOTE: Song leaves currently reuse the same video stub file as
-            // everything else — there is no dedicated audio stub shipped
-            // with the plugin yet. This proves the Artist->Album->Song
-            // shape and playback wiring end-to-end, but a real audio file
-            // would be needed for a genuinely correct listening experience.
-            // Flagging rather than guessing at an assumption here.
+            if (cachedItem != null && cachedItem.LeafMediaType == LeafMediaType.Audio)
+            {
+                logger.Warn("ChannelSync: GetChannelItemMediaInfo returning empty for audio Id='{0}' — audio destinations require a mapped media file; the bundled MP4 is not a valid audio fallback.", id);
+                return Task.FromResult<IEnumerable<MediaSourceInfo>>(Array.Empty<MediaSourceInfo>());
+            }
+
             var source = BuildMediaSource(id, stubVideoPath);
             return Task.FromResult<IEnumerable<MediaSourceInfo>>(new List<MediaSourceInfo> { source });
+        }
+
+        private static ChannelItemResult BuildMediaTestListing()
+        {
+            var config = SyncChannelPlugin.Instance.Configuration;
+            var items = new List<ChannelItemInfo>();
+
+            if (!string.IsNullOrWhiteSpace(config.MediaTestVideoUrl))
+            {
+                items.Add(new ChannelItemInfo
+                {
+                    Id = MediaTestStaticVideoId,
+                    Name = "1. Static HTTPS MP4",
+                    Overview = "MediaSources is persisted with the channel item; the playback callback returns nothing.",
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Video,
+                    ContentType = ChannelMediaContentType.Clip,
+                    ForceUpdate = true,
+                    MediaSources = new List<MediaSourceInfo> { BuildRemoteMediaSource(MediaTestStaticVideoId, config.MediaTestVideoUrl, "mp4", "Static HTTPS MP4") }
+                });
+                items.Add(new ChannelItemInfo
+                {
+                    Id = MediaTestDynamicVideoId,
+                    Name = "2. Callback HTTPS MP4",
+                    Overview = "No static MediaSources; the same MP4 is returned by GetChannelItemMediaInfo at playback time.",
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Video,
+                    ContentType = ChannelMediaContentType.Clip,
+                    ForceUpdate = true
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.MediaTestAudioUrl))
+            {
+                var audio = new ChannelItemInfo
+                {
+                    Id = MediaTestAudioId,
+                    Name = "3. Static HTTPS Audio",
+                    Overview = "Tests Audio plus explicit artist, album artist and album associations.",
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Audio,
+                    ContentType = ChannelMediaContentType.Song,
+                    Artists = new List<string> { "Schema Test Artist" },
+                    AlbumArtists = new List<string> { "Schema Test Album Artist" },
+                    ForceUpdate = true,
+                    MediaSources = new List<MediaSourceInfo> { BuildRemoteMediaSource(MediaTestAudioId, config.MediaTestAudioUrl, ExtensionWithoutQuery(config.MediaTestAudioUrl, "mp3"), "Static HTTPS Audio") }
+                };
+                // The project references the 4.9 controller contract, whose
+                // ChannelItemInfo lacks Album. Emby 4.10 adds it and
+                // ChannelManager copies it to IHasMusicAlbum. Reflection
+                // keeps the plugin binary-compatible while exercising the
+                // property when the running server provides it.
+                TrySetChannelItemAlbum(audio, "Schema Test Album");
+                items.Add(audio);
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.MediaTestHlsUrl))
+            {
+                items.Add(new ChannelItemInfo
+                {
+                    Id = MediaTestHlsId,
+                    Name = "4. Static HLS Video",
+                    Overview = "Tests a persisted remote m3u8 media source.",
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Video,
+                    ContentType = ChannelMediaContentType.Clip,
+                    ForceUpdate = true,
+                    MediaSources = new List<MediaSourceInfo> { BuildRemoteMediaSource(MediaTestHlsId, config.MediaTestHlsUrl, "m3u8", "Static HLS") }
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.MediaTestCachedImagePath) && File.Exists(config.MediaTestCachedImagePath))
+            {
+                items.Add(new ChannelItemInfo
+                {
+                    Id = MediaTestPhotoAlbumId,
+                    Name = "5. Cached Photo Album",
+                    Overview = "A real PhotoAlbum containing two Photo children backed by a locally cached image.",
+                    Type = ChannelItemType.Folder,
+                    FolderType = ChannelFolderType.PhotoAlbum,
+                    ImageUrl = config.MediaTestCachedImagePath,
+                    ForceUpdate = true
+                });
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.MediaTestVideoUrl))
+            {
+                items.Add(new ChannelItemInfo
+                {
+                    Id = MediaTestMovieId,
+                    Name = "6. Movie",
+                    Overview = "A real Emby Movie with persisted HTTPS MP4 media.",
+                    Type = ChannelItemType.Media,
+                    MediaType = ChannelMediaType.Video,
+                    ContentType = ChannelMediaContentType.Movie,
+                    ForceUpdate = true,
+                    MediaSources = new List<MediaSourceInfo> { BuildRemoteMediaSource(MediaTestMovieId, config.MediaTestVideoUrl, "mp4", "Static Movie") }
+                });
+            }
+
+            items.Add(new ChannelItemInfo
+            {
+                Id = MediaTestSeriesId,
+                Name = "7. Show with Coming Soon Episode",
+                Overview = "A real Series with an explicit Season and callback-backed coming-soon Episode.",
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.Series,
+                ForceUpdate = true
+            });
+
+            return new ChannelItemResult { Items = items, TotalRecordCount = items.Count };
+        }
+
+        private static ChannelItemResult BuildMediaTestSeriesListing()
+        {
+            var season = new ChannelItemInfo
+            {
+                Id = MediaTestSeasonId,
+                Name = "Season 1",
+                Type = ChannelItemType.Folder,
+                FolderType = ChannelFolderType.Season,
+                IndexNumber = 1,
+                ForceUpdate = true
+            };
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { season }, TotalRecordCount = 1 };
+        }
+
+        private static ChannelItemResult BuildMediaTestSeasonListing()
+        {
+            var episode = new ChannelItemInfo
+            {
+                Id = MediaTestEpisodeId,
+                Name = "Coming Soon",
+                Overview = "Explicit child of Season 1; media is resolved through the playback callback.",
+                Type = ChannelItemType.Media,
+                MediaType = ChannelMediaType.Video,
+                ContentType = ChannelMediaContentType.Episode,
+                IndexNumber = 1,
+                ParentIndexNumber = 1,
+                ForceUpdate = true
+            };
+            return new ChannelItemResult { Items = new List<ChannelItemInfo> { episode }, TotalRecordCount = 1 };
+        }
+
+        private static ChannelItemResult BuildMediaTestPhotoListing()
+        {
+            var path = SyncChannelPlugin.Instance.Configuration.MediaTestCachedImagePath;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return new ChannelItemResult { Items = new List<ChannelItemInfo>(), TotalRecordCount = 0 };
+            }
+
+            var photos = new List<ChannelItemInfo>
+            {
+                BuildMediaTestPhoto(MediaTestPhotoOneId, "Photo 1", path),
+                BuildMediaTestPhoto(MediaTestPhotoTwoId, "Photo 2", path)
+            };
+            return new ChannelItemResult { Items = photos, TotalRecordCount = photos.Count };
+        }
+
+        private static ChannelItemInfo BuildMediaTestPhoto(string id, string name, string path) => new ChannelItemInfo
+        {
+            Id = id,
+            Name = name,
+            Type = ChannelItemType.Media,
+            MediaType = ChannelMediaType.Video,
+            ContentType = ChannelMediaContentType.Trailer,
+            ForceUpdate = true,
+            MediaSources = new List<MediaSourceInfo> { BuildLocalImageSource(id, path, name) }
+        };
+
+        private static MediaSourceInfo BuildRemoteMediaSource(string itemId, string path, string container, string name) => new MediaSourceInfo
+        {
+            Id = itemId,
+            Path = path,
+            Protocol = MediaProtocol.Http,
+            Container = container,
+            IsRemote = true,
+            SupportsDirectPlay = true,
+            SupportsDirectStream = true,
+            SupportsTranscoding = true,
+            Name = name
+        };
+
+        private static MediaSourceInfo BuildLocalImageSource(string itemId, string path, string name) => new MediaSourceInfo
+        {
+            Id = itemId,
+            Path = path,
+            Protocol = MediaProtocol.File,
+            Container = ExtensionWithoutQuery(path, "jpg"),
+            IsRemote = false,
+            SupportsDirectPlay = true,
+            SupportsDirectStream = false,
+            SupportsTranscoding = false,
+            Name = name
+        };
+
+        private static string ExtensionWithoutQuery(string path, string fallback)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return fallback;
+            var queryIndex = path.IndexOf('?');
+            var clean = queryIndex < 0 ? path : path.Substring(0, queryIndex);
+            var extension = Path.GetExtension(clean).TrimStart('.');
+            return string.IsNullOrWhiteSpace(extension) ? fallback : extension.ToLowerInvariant();
+        }
+
+        private static void TrySetChannelItemAlbum(ChannelItemInfo item, string album)
+        {
+            var property = typeof(ChannelItemInfo).GetProperty("Album");
+            if (property != null && property.CanWrite)
+            {
+                property.SetValue(item, album);
+            }
         }
 
         internal static string BuildFolderItemId(string folderNodeId) => FolderIdPrefix + folderNodeId;
@@ -350,6 +868,50 @@ namespace SyncChannel.Channels
                 .FirstOrDefault(i => string.Equals(i.StableId, stableId, StringComparison.OrdinalIgnoreCase));
         }
 
+        private CachedChannelItem FindCachedItemForMediaId(string id, out string folderNodeId)
+        {
+            folderNodeId = null;
+            if (string.IsNullOrEmpty(id)) return null;
+
+            if (id.StartsWith(GroupedEpisodeIdPrefix, StringComparison.Ordinal) ||
+                id.StartsWith(CatalogueTrackIdPrefix, StringComparison.Ordinal))
+            {
+                var prefix = id.StartsWith(GroupedEpisodeIdPrefix, StringComparison.Ordinal)
+                    ? GroupedEpisodeIdPrefix : CatalogueTrackIdPrefix;
+                var scoped = id.Substring(prefix.Length).Split(new[] { "::" }, 3, StringSplitOptions.None);
+                if (scoped.Length != 3) return null;
+                folderNodeId = scoped[0];
+                return cacheStore.Read(folderNodeId).Items.FirstOrDefault(i =>
+                    string.Equals(i.ProviderKey, scoped[1], StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(i.StableId, scoped[2], StringComparison.OrdinalIgnoreCase));
+            }
+
+            string payload;
+            if (id.StartsWith(ItemIdPrefix, StringComparison.Ordinal))
+            {
+                payload = id.Substring(ItemIdPrefix.Length);
+            }
+            else if (id.StartsWith(EpisodeIdPrefix + SeasonIdPrefix + SeriesIdPrefix, StringComparison.Ordinal))
+            {
+                payload = id.Substring((EpisodeIdPrefix + SeasonIdPrefix + SeriesIdPrefix).Length);
+            }
+            else if (id.StartsWith(SongIdPrefix + AlbumIdPrefix + ArtistIdPrefix, StringComparison.Ordinal))
+            {
+                payload = id.Substring((SongIdPrefix + AlbumIdPrefix + ArtistIdPrefix).Length);
+            }
+            else if (id.StartsWith(GenericLeafIdPrefix, StringComparison.Ordinal))
+            {
+                payload = id.Substring(GenericLeafIdPrefix.Length);
+            }
+            else
+            {
+                return null;
+            }
+
+            folderNodeId = ParseFolderNodeIdFromPayload(payload);
+            return FindCachedItem(folderNodeId, ParseStableIdFromPayload(payload));
+        }
+
         private ChannelItemInfo ToChannelItemInfo(CachedChannelItem item, string folderNodeId, string stubVideoPath)
         {
             if (string.IsNullOrEmpty(item.StableId))
@@ -444,15 +1006,21 @@ namespace SyncChannel.Channels
                 info.ProviderIds[kvp.Key] = kvp.Value;
             }
 
+            if (item.LeafMediaType == LeafMediaType.Audio)
+            {
+                info.Artists = string.IsNullOrWhiteSpace(item.Artist) ? null : new List<string> { item.Artist };
+                info.AlbumArtists = string.IsNullOrWhiteSpace(item.AlbumArtist) ? null : new List<string> { item.AlbumArtist };
+                TrySetChannelItemAlbum(info, item.Album);
+            }
+
             if (string.IsNullOrEmpty(item.PosterUrl))
             {
                 logger.Warn("ChannelSync: FlatMedia item '{0}' in folder '{1}' has no PosterUrl — will show with no image.", item.Title, folderNodeId);
             }
 
-            if (!string.IsNullOrEmpty(stubVideoPath))
-            {
-                info.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(itemId, stubVideoPath) };
-            }
+            // Video/audio media is returned by GetChannelItemMediaInfo.
+            // Persisting an unprobed remote source causes Emby's first
+            // playback request to probe it and then fail that same request.
 
             return info;
         }
@@ -477,7 +1045,7 @@ namespace SyncChannel.Channels
                 ForceUpdate = true
             };
 
-            foreach (var kvp in item.ProviderIds)
+            foreach (var kvp in (item.SeriesProviderIds.Count > 0 ? item.SeriesProviderIds : item.ProviderIds))
             {
                 info.ProviderIds[kvp.Key] = kvp.Value;
             }
@@ -531,10 +1099,8 @@ namespace SyncChannel.Channels
                 ForceUpdate = true
             };
 
-            if (!string.IsNullOrEmpty(stubVideoPath))
-            {
-                episode.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(episodeId, stubVideoPath) };
-            }
+            // Resolved through GetChannelItemMediaInfo (mapped source first,
+            // bundled coming-soon MP4 otherwise).
 
             return new ChannelItemResult { Items = new List<ChannelItemInfo> { episode }, TotalRecordCount = 1 };
         }
@@ -614,14 +1180,9 @@ namespace SyncChannel.Channels
                 ParentIndexNumber = 1,
                 Artists = string.IsNullOrEmpty(source?.Artist) ? null : new List<string> { source.Artist },
                 AlbumArtists = string.IsNullOrEmpty(source?.AlbumArtist) ? null : new List<string> { source.AlbumArtist },
-                //Album = source?.Album,
                 ForceUpdate = true
             };
-
-            if (!string.IsNullOrEmpty(stubVideoPath))
-            {
-                song.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(songId, stubVideoPath) };
-            }
+            TrySetChannelItemAlbum(song, source?.Album);
 
             return new ChannelItemResult { Items = new List<ChannelItemInfo> { song }, TotalRecordCount = 1 };
         }
@@ -757,7 +1318,7 @@ namespace SyncChannel.Channels
                 stubVideoPath = ResolveDefaultStubPath();
             }
 
-            var leafId = "syncchannel-gcleaf-" + containerId;
+            var leafId = GenericLeafIdPrefix + folderNodeId + "::" + stableId;
 
             var leaf = new ChannelItemInfo
             {
@@ -770,9 +1331,11 @@ namespace SyncChannel.Channels
                 ForceUpdate = true
             };
 
-            if (!string.IsNullOrEmpty(stubVideoPath))
+            if (source.LeafMediaType == LeafMediaType.Audio)
             {
-                leaf.MediaSources = new List<MediaSourceInfo> { BuildMediaSource(leafId, stubVideoPath) };
+                leaf.Artists = string.IsNullOrWhiteSpace(source.Artist) ? null : new List<string> { source.Artist };
+                leaf.AlbumArtists = string.IsNullOrWhiteSpace(source.AlbumArtist) ? null : new List<string> { source.AlbumArtist };
+                TrySetChannelItemAlbum(leaf, source.Album);
             }
 
             return new ChannelItemResult { Items = new List<ChannelItemInfo> { leaf }, TotalRecordCount = 1 };
@@ -822,9 +1385,8 @@ namespace SyncChannel.Channels
             Name = "Coming Soon"
         };
 
-        // PhotoAlbum leaf only — the schema's MediaFileUrlField is typically
-        // a remote image URL (same shape as PosterUrl), not a local stub
-        // file, so this branches on that instead of always assuming File.
+        // Used for mapped media of every destination. PhotoAlbum persists
+        // this source while video/audio return it from the callback.
         private static MediaSourceInfo BuildRemoteOrLocalMediaSource(string itemId, string path)
         {
             var isRemote = path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
@@ -835,6 +1397,7 @@ namespace SyncChannel.Channels
                 Id = itemId,
                 Path = path,
                 Protocol = isRemote ? MediaProtocol.Http : MediaProtocol.File,
+                Container = ExtensionWithoutQuery(path, string.Empty),
                 IsRemote = isRemote,
                 SupportsDirectPlay = true,
                 SupportsDirectStream = true,

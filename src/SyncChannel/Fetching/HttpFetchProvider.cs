@@ -141,7 +141,16 @@ namespace SyncChannel.Fetching
                             Artist = ResolveMapping(el, schema.ArtistField, connection, identity),
                             AlbumArtist = ResolveMapping(el, schema.AlbumArtistField, connection, identity),
                             Album = ResolveMapping(el, schema.AlbumField, connection, identity),
-                            MediaFileUrl = ResolveMappingOrNullIfAnyFieldBlank(el, schema.MediaFileUrlField, connection, identity)
+                            MediaFileUrl = ResolveMappingOrNullIfAnyFieldBlank(el, schema.MediaFileUrlField, connection, identity),
+                            ShowIdentity = ResolveMapping(el, schema.ShowIdentityField, connection, identity),
+                            ShowTitle = ResolveMapping(el, schema.ShowTitleField, connection, identity),
+                            ShowOverview = ResolveMapping(el, schema.ShowOverviewField, connection, identity),
+                            ShowPosterUrl = ResolveMappingOrNullIfAnyFieldBlank(el, schema.ShowPosterUrlField, connection, identity),
+                            SeasonNumber = ParseInt(ResolveMapping(el, schema.SeasonNumberField, connection, identity)),
+                            SeasonTitle = ResolveMapping(el, schema.SeasonTitleField, connection, identity),
+                            EpisodeNumber = ParseInt(ResolveMapping(el, schema.EpisodeNumberField, connection, identity)),
+                            ArtistIdentity = ResolveMapping(el, schema.ArtistIdentityField, connection, identity),
+                            AlbumIdentity = ResolveMapping(el, schema.AlbumIdentityField, connection, identity)
                         };
 
                         foreach (var kvp in schema.ProviderIdFields)
@@ -152,6 +161,11 @@ namespace SyncChannel.Fetching
                                 item.ProviderIds[kvp.Key] = value;
                             }
                         }
+
+                        ResolveProviderIds(el, schema.SeriesProviderIdFields, connection, identity, item.SeriesProviderIds);
+                        ResolveProviderIds(el, schema.SeasonProviderIdFields, connection, identity, item.SeasonProviderIds);
+                        ResolveProviderIds(el, schema.ArtistProviderIdFields, connection, identity, item.ArtistProviderIds);
+                        ResolveProviderIds(el, schema.AlbumProviderIdFields, connection, identity, item.AlbumProviderIds);
 
                         results.Add(item);
                     }
@@ -169,6 +183,26 @@ namespace SyncChannel.Fetching
                     "ChannelSync: Rule evaluation/mapping failed for schema '{0}' — treating as failure, not zero matches",
                     ex, schema.DisplayName);
                 return null;
+            }
+        }
+
+        private static int? ParseInt(string value)
+        {
+            return int.TryParse(value, out var parsed) ? parsed : (int?)null;
+        }
+
+        private static void ResolveProviderIds(
+            JsonElement element,
+            Dictionary<string, FieldMapping> mappings,
+            ConnectionEntry connection,
+            string identity,
+            Dictionary<string, string> destination)
+        {
+            if (mappings == null) return;
+            foreach (var mapping in mappings)
+            {
+                var value = ResolveMapping(element, mapping.Value, connection, identity);
+                if (!string.IsNullOrEmpty(value)) destination[mapping.Key] = value;
             }
         }
 

@@ -296,7 +296,7 @@ namespace SyncChannel.ScheduledTasks
                 }
 
                 anySucceeded = true;
-                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, connection.Id, schema, priorByStableId)));
+                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, fetch.DisplayLabel, connection.Id, schema, priorByStableId)));
             }
 
             if (!anyAttempted)
@@ -362,6 +362,7 @@ namespace SyncChannel.ScheduledTasks
         private static CachedChannelItem ToCache(
             FetchedItem item,
             string fetchInstanceId,
+            string fetchDisplayName,
             string connectionId,
             EndpointSchema schema,
             IReadOnlyDictionary<string, CachedChannelItem> priorByStableId)
@@ -373,8 +374,10 @@ namespace SyncChannel.ScheduledTasks
             return new CachedChannelItem
             {
                 ProviderKey = fetchInstanceId,
+                FetchDisplayName = string.IsNullOrWhiteSpace(fetchDisplayName) ? schema.DisplayName : fetchDisplayName,
                 SourceFingerprint = connectionId + "|" + schema.Id,
                 StableId = item.StableId,
+                Presentation = schema.Presentation,
                 ObjectKind = schema.ObjectKind,
                 LeafMediaType = schema.LeafMediaType,
                 LeafContentType = schema.LeafContentType,
@@ -390,7 +393,20 @@ namespace SyncChannel.ScheduledTasks
                 AlbumArtist = item.AlbumArtist,
                 Album = item.Album,
                 MediaFileUrl = item.MediaFileUrl,
-                ProviderIds = item.ProviderIds
+                ShowIdentity = item.ShowIdentity,
+                ShowTitle = item.ShowTitle,
+                ShowOverview = item.ShowOverview,
+                ShowPosterUrl = item.ShowPosterUrl,
+                SeasonNumber = item.SeasonNumber,
+                SeasonTitle = item.SeasonTitle,
+                EpisodeNumber = item.EpisodeNumber,
+                ArtistIdentity = item.ArtistIdentity,
+                AlbumIdentity = item.AlbumIdentity,
+                ProviderIds = item.ProviderIds,
+                SeriesProviderIds = item.SeriesProviderIds,
+                SeasonProviderIds = item.SeasonProviderIds,
+                ArtistProviderIds = item.ArtistProviderIds,
+                AlbumProviderIds = item.AlbumProviderIds
             };
         }
 

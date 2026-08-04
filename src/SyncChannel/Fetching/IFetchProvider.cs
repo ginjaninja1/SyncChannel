@@ -54,13 +54,27 @@ namespace SyncChannel.Fetching
         public string AlbumArtist { get; set; } = string.Empty;
         public string Album { get; set; } = string.Empty;
 
-        // PhotoAlbum kind only — the actual image file URL, resolved from
-        // EndpointSchema.MediaFileUrlField. Distinct from PosterUrl (a
-        // thumbnail set via ImageUrl) — this becomes the Photo BaseItem's
-        // MediaSourceInfo.Path (confirmed via ILSpy).
+        // The actual playable/viewable media URL or local path. This is
+        // distinct from PosterUrl: a poster describes an item, while this
+        // is what Emby opens when the user presses Play. Photos persist it
+        // into Photo.Path; video/audio use the media-info callback.
         public string MediaFileUrl { get; set; } = string.Empty;
 
+        public string ShowIdentity { get; set; } = string.Empty;
+        public string ShowTitle { get; set; } = string.Empty;
+        public string ShowOverview { get; set; } = string.Empty;
+        public string ShowPosterUrl { get; set; } = string.Empty;
+        public int? SeasonNumber { get; set; }
+        public string SeasonTitle { get; set; } = string.Empty;
+        public int? EpisodeNumber { get; set; }
+        public string ArtistIdentity { get; set; } = string.Empty;
+        public string AlbumIdentity { get; set; } = string.Empty;
+
         public Dictionary<string, string> ProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> SeriesProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> SeasonProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> ArtistProviderIds { get; set; } = new Dictionary<string, string>();
+        public Dictionary<string, string> AlbumProviderIds { get; set; } = new Dictionary<string, string>();
     }
 
     /// <summary>
