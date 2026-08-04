@@ -180,9 +180,18 @@ namespace SyncChannel.Configuration
 
         // Left/Right: character count (Start only, End ignored).
         // Substring/ArraySlice: inclusive start/end. ArraySlice End=-1
-        // means "all".
+        // means "all". When ArrayMatchField is populated, ArraySlice instead
+        // selects the first object whose sibling field equals ArrayMatchValue;
+        // Start/End are ignored in that mode.
         public int Start { get; set; }
         public int End { get; set; } = -1;
+
+        // ArraySlice's field=value mode. The wrapped Field supplies the value
+        // path (for example images.remoteUrl); this field is resolved relative
+        // to the same array item (for example coverType) before projecting the
+        // wrapped value. Empty means the normal index/range/all modes.
+        public string ArrayMatchField { get; set; } = string.Empty;
+        public string ArrayMatchValue { get; set; } = string.Empty;
 
         // Only populated for Kind=Function — the node(s) this function
         // wraps. A Function with one child is the common case (e.g. Left[4]

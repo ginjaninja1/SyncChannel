@@ -154,15 +154,12 @@
             }
         };
 
-        // Poster URL, and anything else that needs "the Nth value out of a
-        // list field" — wraps a single Field node in an ArraySlice Function.
-        // Positional, not filtered by any sibling field (e.g. coverType):
-        // takes whichever entry the given index happens to be. Used for
-        // Radarr/Sonarr's images.remoteUrl, where index 0 has consistently
-        // been the poster in every response seen so far, but that's
-        // observed behavior, not a documented guarantee — see Evidence.md
-        // discipline. Revisit if either API ever reorders this.
-        private static FieldMapping ArraySliceField(string jsonPath, int start, int end) => new FieldMapping
+        // Selects the first value from an array-of-objects whose sibling field
+        // matches the requested value. For example, coverType=poster wrapped
+        // around images.remoteUrl keeps the image type and URL associated
+        // instead of depending on their positions in the response array.
+        private static FieldMapping ArrayMatchField(
+            string jsonPath, string matchField, string matchValue) => new FieldMapping
         {
             Segments = new List<MappingNode>
             {
@@ -170,8 +167,8 @@
                 {
                     Kind = MappingNodeKind.Function,
                     Function = FunctionKind.ArraySlice,
-                    Start = start,
-                    End = end,
+                    ArrayMatchField = matchField,
+                    ArrayMatchValue = matchValue,
                     Children = new List<MappingNode> { new MappingNode { Kind = MappingNodeKind.Field, Value = jsonPath } }
                 }
             }
@@ -206,7 +203,7 @@
             OriginalTitleField = Field("originalTitle"),
             YearField = Field("year"),
             OverviewField = Field("overview"),
-            PosterUrlField = ArraySliceField("images.remoteUrl", 0, 0),
+            PosterUrlField = ArrayMatchField("images.remoteUrl", "coverType", "poster"),
             ProviderIdFields = new Dictionary<string, FieldMapping>
             {
                 ["Tmdb"] = Field("tmdbId"),
@@ -257,7 +254,7 @@
             OriginalTitleField = Field("title"),
             YearField = Field("year"),
             OverviewField = Field("overview"),
-            PosterUrlField = ArraySliceField("images.remoteUrl", 0, 0),
+            PosterUrlField = ArrayMatchField("images.remoteUrl", "coverType", "poster"),
             ProviderIdFields = new Dictionary<string, FieldMapping>
             {
                 ["Tvdb"] = Field("tvdbId"),

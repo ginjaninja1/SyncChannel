@@ -14,6 +14,7 @@ namespace SyncChannel.Fetching
     using System;
     using System.Collections.Generic;
     using System.IO;
+    using System.Linq;
     using System.Threading;
     using System.Threading.Tasks;
     using System.Text.Json;
@@ -279,6 +280,15 @@ namespace SyncChannel.Fetching
                 // fallback, not the primary guard.
                 if (node.Children.Count == 1 && node.Children[0].Kind == MappingNodeKind.Field)
                 {
+                    if (!string.IsNullOrWhiteSpace(node.ArrayMatchField))
+                    {
+                        return ResolveFirstArrayMatch(
+                            el,
+                            node.Children[0].Value,
+                            node.ArrayMatchField,
+                            node.ArrayMatchValue);
+                    }
+
                     var values = RuleEvaluator.ResolveDisplayValues(el, node.Children[0].Value);
                     if (values.Count > 0) return ApplyArraySlice(values, node);
                 }
@@ -298,6 +308,95 @@ namespace SyncChannel.Fetching
             for (int i = start; i <= end; i++) slice.Add(values[i]);
             return string.Join(", ", slice);
         }
+
+        // Resolves Array[field=value][array.resultField] without flattening
+        // array.resultField first. Keeping each original object intact is what
+        // lets a sibling discriminator such as coverType reliably select its
+        // own remoteUrl regardless of Radarr/Sonarr array ordering.
+        private static string ResolveFirstArrayMatch(
+            JsonElement itemRoot,
+            string resultPath,
+            string matchField,
+            string matchValue)
+        {
+            var resultSegments = SplitPath(resultPath);
+            if (resultSegments.Length < 2) return string.Empty;
+
+            var current = itemRoot;
+            var arraySegmentCount = 0;
+            for (var i = 0; i < resultSegments.Length; i++)
+            {
+                if (current.ValueKind != JsonValueKind.Object ||
+                    !current.TryGetProperty(resultSegments[i], out current))
+                {
+                    return string.Empty;
+                }
+
+                arraySegmentCount = i + 1;
+                if (current.ValueKind == JsonValueKind.Array) break;
+            }
+
+            if (current.ValueKind != JsonValueKind.Array ||
+                arraySegmentCount >= resultSegments.Length)
+            {
+                return string.Empty;
+            }
+
+            var relativeResult = resultSegments.Skip(arraySegmentCount).ToArray();
+            var matchSegments = SplitPath(matchField);
+
+            // Accept either the compact sibling form (coverType) or a full
+            // path sharing the selected array prefix (images.coverType).
+            if (matchSegments.Length > arraySegmentCount &&
+                resultSegments.Take(arraySegmentCount)
+                    .SequenceEqual(matchSegments.Take(arraySegmentCount), StringComparer.Ordinal))
+            {
+                matchSegments = matchSegments.Skip(arraySegmentCount).ToArray();
+            }
+
+            if (matchSegments.Length == 0) return string.Empty;
+
+            foreach (var arrayItem in current.EnumerateArray())
+            {
+                if (!TryResolveRelative(arrayItem, matchSegments, out var actualMatch) ||
+                    !string.Equals(JsonScalarToString(actualMatch), matchValue ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (TryResolveRelative(arrayItem, relativeResult, out var result))
+                {
+                    return JsonScalarToString(result);
+                }
+
+                return string.Empty;
+            }
+
+            return string.Empty;
+        }
+
+        private static string[] SplitPath(string path) =>
+            (path ?? string.Empty)
+                .Split(new[] { '.' }, StringSplitOptions.RemoveEmptyEntries);
+
+        private static bool TryResolveRelative(JsonElement current, string[] segments, out JsonElement result)
+        {
+            result = current;
+            foreach (var segment in segments)
+            {
+                if (result.ValueKind != JsonValueKind.Object ||
+                    !result.TryGetProperty(segment, out var next))
+                {
+                    result = default;
+                    return false;
+                }
+                result = next;
+            }
+            return true;
+        }
+
+        private static string JsonScalarToString(JsonElement value) =>
+            value.ValueKind == JsonValueKind.String ? value.GetString() ?? string.Empty : value.ToString();
 
         private static string ApplyStringFunction(string value, MappingNode node)
         {

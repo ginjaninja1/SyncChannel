@@ -317,14 +317,14 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // shell (dropped into empty space in the field builder) or onto an
         // existing node's own drag handle (which wraps that node as the
         // function's single child, keeping whatever was already built).
-        // Defaults match what was agreed: Array defaults to picking just
-        // the first element, matching how an admin would want it 9 times
-        // out of 10.
+        // Array defaults to picking the first element; its parameter also
+        // accepts ranges, all, and sibling-field matches such as
+        // coverType=poster.
         var FUNCTION_PRESETS = [
             { name: 'Left', title: 'Keep the first N characters of whatever this wraps, e.g. Left[4] on "1974-03-03" gives "1974"', defaults: { Function: 'Left', Start: 4, End: -1 } },
             { name: 'Right', title: 'Keep the last N characters of whatever this wraps', defaults: { Function: 'Right', Start: 4, End: -1 } },
             { name: 'Substring', title: 'Keep characters from index Start to End (inclusive) of whatever this wraps', defaults: { Function: 'Substring', Start: 0, End: 3 } },
-            { name: 'Array', title: 'Pick element(s) out of a list field by index — defaults to just the first element. Only valid wrapping a single list-type field.', defaults: { Function: 'ArraySlice', Start: 0, End: 0 } }
+            { name: 'Array', title: 'Pick list values by index/range, select all, or select the first object matching siblingField=value. Only valid wrapping a single list-type field.', defaults: { Function: 'ArraySlice', Start: 0, End: 0 } }
         ];
 
         function renderFunctionPaletteChips(container) {
@@ -382,7 +382,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         // Compact text notation for a Function node's own badge + param
         // input, e.g. "Left" chip showing "[4]" beside it, or "Array"
-        // chip showing "[0]"/"[0:2]"/"[all]". Kept purely for display —
+        // chip showing "[0]"/"[0:2]"/"[all]"/"[coverType=poster]".
+        // Kept purely for display —
         // parseModifierParamText below is the inverse, used when the param
         // text is edited directly.
         function functionDisplayText(node) {
@@ -403,6 +404,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 case 'Substring':
                     return node.Start + ':' + node.End;
                 case 'ArraySlice':
+                    if (node.ArrayMatchField) return node.ArrayMatchField + '=' + (node.ArrayMatchValue || '');
                     if (node.End < 0) return 'all';
                     return node.Start === node.End ? String(node.Start) : (node.Start + ':' + node.End);
                 default:
@@ -417,11 +419,20 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         function parseModifierParamText(functionKind, text) {
             var t = (text || '').trim();
             if (functionKind === 'ArraySlice') {
-                if (/^all$/i.test(t)) return { Start: 0, End: -1 };
+                if (/^all$/i.test(t)) return { Start: 0, End: -1, ArrayMatchField: '', ArrayMatchValue: '' };
                 var m2 = /^(\d+):(\d+)$/.exec(t);
-                if (m2) return { Start: parseInt(m2[1], 10), End: parseInt(m2[2], 10) };
+                if (m2) return { Start: parseInt(m2[1], 10), End: parseInt(m2[2], 10), ArrayMatchField: '', ArrayMatchValue: '' };
                 var m1 = /^(\d+)$/.exec(t);
-                if (m1) return { Start: parseInt(m1[1], 10), End: parseInt(m1[1], 10) };
+                if (m1) return { Start: parseInt(m1[1], 10), End: parseInt(m1[1], 10), ArrayMatchField: '', ArrayMatchValue: '' };
+                var match = /^([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.+)$/.exec(t);
+                if (match && match[2].trim()) {
+                    return {
+                        Start: 0,
+                        End: -1,
+                        ArrayMatchField: match[1],
+                        ArrayMatchValue: match[2].trim()
+                    };
+                }
                 return null;
             }
             if (functionKind === 'Substring') {
@@ -444,6 +455,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             if (node.Kind !== 'Function') return true;
             if (node.Function !== 'ArraySlice') return true;
             if (node.Children.length !== 1 || node.Children[0].Kind !== 'Field') return false;
+            if (node.ArrayMatchField && !node.ArrayMatchValue) return false;
             var type = node.Children[0].CachedType;
             return type === undefined || type === 'List';
         }
@@ -567,7 +579,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             // the actual resolved value. Operates on the node tree directly:
             // a Function node concatenates its Children's preview text (or,
             // for ArraySlice, reads its single Field child's raw example
-            // list directly), then applies its own operation.
+            // list directly and optionally aligns it with a sibling field),
+            // then applies its own operation.
             // Returns the raw record-record's example values for `field` at
             // `exampleIndex` (record 0/1/2), or null if that field wasn't
             // discovered or that particular record had no value at this
@@ -608,6 +621,26 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         var field = fbp[node.Children[0].Value];
                         var recordValues = fieldExampleRecord(field, exampleIndex);
                         if (recordValues === null) return { text: null, hasFieldValue: false };
+
+                        if (node.ArrayMatchField) {
+                            var resultPath = node.Children[0].Value || '';
+                            var lastDot = resultPath.lastIndexOf('.');
+                            if (lastDot < 1) return { text: null, hasFieldValue: false };
+                            var arrayPath = resultPath.slice(0, lastDot);
+                            var matchPath = node.ArrayMatchField.indexOf('.') >= 0
+                                ? node.ArrayMatchField
+                                : arrayPath + '.' + node.ArrayMatchField;
+                            var matchValues = fieldExampleRecord(fbp[matchPath], exampleIndex);
+                            if (matchValues === null) return { text: null, hasFieldValue: false };
+                            var wanted = String(node.ArrayMatchValue || '').toLowerCase();
+                            for (var i = 0; i < matchValues.length; i++) {
+                                if (String(matchValues[i]).toLowerCase() === wanted && i < recordValues.length) {
+                                    return { text: recordValues[i], hasFieldValue: true };
+                                }
+                            }
+                            return { text: null, hasFieldValue: false };
+                        }
+
                         var sliced = node.End < 0 ? recordValues : recordValues.slice(
                             Math.max(0, Math.min(node.Start, recordValues.length - 1)),
                             Math.max(0, Math.min(node.End, recordValues.length - 1)) + 1
@@ -845,7 +878,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 paramInput.value = formatModifierParamText(node);
                 paramInput.disabled = !!locked;
                 paramInput.title = node.Function === 'ArraySlice'
-                    ? 'Index, or start:end, or "all" — e.g. 0, 0:1, all'
+                    ? 'Index, start:end, "all", or siblingField=value — e.g. 0, 0:1, all, coverType=poster'
                     : 'Character count' + (node.Function === 'Substring' ? ' as start:end' : '');
                 paramInput.addEventListener('input', function (e) {
                     var parsed = parseModifierParamText(node.Function, e.target.value);
@@ -853,6 +886,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     paramInput.classList.remove('esMapModifierInvalid');
                     node.Start = parsed.Start;
                     node.End = parsed.End;
+                    if (node.Function === 'ArraySlice') {
+                        node.ArrayMatchField = parsed.ArrayMatchField || '';
+                        node.ArrayMatchValue = parsed.ArrayMatchValue || '';
+                    }
                     markSchemasDirty(activeView);
                 });
                 paramInput.addEventListener('blur', function () {
@@ -2166,8 +2203,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // than hardcoding property names — stays correct if fields get
         // added/renamed on EndpointSchema later without needing a matching
         // update here. Returns every invalid Function node found (currently
-        // only ArraySlice wrapping something other than a single list-typed
-        // Field — see functionNodeValidity). CachedType is only populated
+        // only an invalid ArraySlice shape or match — see
+        // functionNodeValidity). CachedType is only populated
         // for Field nodes that have actually been rendered this session
         // (see renderNode), so a schema whose mapping tab was never opened
         // this session won't have it and fails open (assumed valid) rather
