@@ -5,10 +5,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
     function ($, store, editorSession, dirtyTracker, helpers) {
         'use strict';
 
-        // The Application dropdown's preset table. Single source of truth
-        // for presets — separate from KNOWN_SYSTEM_TYPES below, which is a
-        // free-form, open-ended list seeded from whatever's actually been
-        // used (including past custom SystemTypes).
+        // The Application dropdown's preset table. SystemType is the internal
+        // preset key; newly selected custom connections use the fixed
+        // "custom" key (legacy free-text values still load as Custom).
         var KNOWN_APPLICATIONS = [
             { key: 'radarr', label: 'Radarr (built-in)', apiKeyParamName: 'apikey', urlPlaceholder: 'http://192.168.1.10:7878' },
             { key: 'sonarr', label: 'Sonarr (built-in)', apiKeyParamName: 'apikey', urlPlaceholder: 'http://192.168.1.10:8989' },
@@ -16,7 +15,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             { key: 'custom', label: 'Custom', apiKeyParamName: 'apikey', urlPlaceholder: 'http://192.168.1.10:port' }
         ];
         var CUSTOM_APPLICATION = KNOWN_APPLICATIONS[KNOWN_APPLICATIONS.length - 1];
-        var KNOWN_SYSTEM_TYPES = ['radarr', 'sonarr'];
 
         var tracker = dirtyTracker.createTracker(editableConnectionsJson);
         var saving = false;
@@ -100,25 +98,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             store.emit('connectionsChanged');
         }
 
-        function refreshKnownSystemTypesFromConnections() {
-            store.get('connections').forEach(function (c) {
-                if (c.SystemType && KNOWN_SYSTEM_TYPES.indexOf(c.SystemType) === -1) {
-                    KNOWN_SYSTEM_TYPES.push(c.SystemType);
-                }
-            });
-        }
-
-        function renderSystemTypeDatalist(view) {
-            var list = view.querySelector('#knownSystemTypes');
-            if (!list) return;
-            list.innerHTML = '';
-            KNOWN_SYSTEM_TYPES.forEach(function (t) {
-                var opt = document.createElement('option');
-                opt.value = t;
-                list.appendChild(opt);
-            });
-        }
-
         function renderConnectionsTab(view) {
             var connections = store.get('connections');
             var list = view.querySelector('#connList');
@@ -147,8 +126,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
                 // Single decision point: Application. Radarr/Sonarr/Emby are
                 // known, fixed presets (scheme/port hint + API key parameter
-                // name); Custom hands control of SystemType and the API key
-                // parameter name to the operator directly.
+                // name); Custom exposes only the API key parameter name. Its
+                // internal SystemType is set to "custom" when selected.
                 var appSelect = document.createElement('select');
                 appSelect.style.width = '10em';
                 KNOWN_APPLICATIONS.forEach(function (app) {
@@ -158,12 +137,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     appSelect.appendChild(opt);
                 });
 
-                var customTypeInput = document.createElement('input');
-                customTypeInput.setAttribute('list', 'knownSystemTypes');
-                customTypeInput.style.width = '9em';
-                customTypeInput.placeholder = 'system type';
-                customTypeInput.title = 'Free-text identifier for this custom system -- must match the System Type set on its Endpoint Schema.';
-
                 var paramNameInput = document.createElement('input');
                 paramNameInput.style.width = '6em';
                 paramNameInput.placeholder = 'apikey';
@@ -171,8 +144,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
                 var currentApp = KNOWN_APPLICATIONS.filter(function (a) { return a.key === c.SystemType; })[0] || CUSTOM_APPLICATION;
                 appSelect.value = currentApp.key;
-                customTypeInput.value = c.SystemType || '';
-                customTypeInput.style.display = (currentApp.key === 'custom') ? '' : 'none';
                 paramNameInput.value = c.ApiKeyParamName || currentApp.apiKeyParamName;
                 if (!c.SystemType) { c.SystemType = currentApp.key; }
                 if (!c.ApiKeyParamName) { c.ApiKeyParamName = paramNameInput.value; }
@@ -182,7 +153,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 appSelect.addEventListener('change', function (e) {
                     var app = KNOWN_APPLICATIONS.filter(function (a) { return a.key === e.target.value; })[0] || CUSTOM_APPLICATION;
 
-                    customTypeInput.style.display = (app.key === 'custom') ? '' : 'none';
                     urlInput.placeholder = app.urlPlaceholder;
 
                     if (!c.DisplayLabelIsUserEntered) {
@@ -190,15 +160,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         labelInput.value = c.DisplayLabel;
                     }
 
-                    if (app.key === 'custom') {
-                        if (KNOWN_APPLICATIONS.some(function (known) {
-                            return known.key !== 'custom' && known.key === c.SystemType;
-                        })) {
-                            customTypeInput.value = '';
-                        }
-                        c.SystemType = customTypeInput.value;
-                    } else {
-                        c.SystemType = app.key;
+                    c.SystemType = app.key;
+                    if (app.key !== 'custom') {
                         c.ApiKeyParamName = app.apiKeyParamName;
                         paramNameInput.value = app.apiKeyParamName;
                     }
@@ -208,14 +171,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         urlInput.value = c.BaseUrl;
                     }
 
-                    refreshKnownSystemTypesFromConnections();
-                    renderSystemTypeDatalist(view);
-                });
-
-                customTypeInput.addEventListener('input', function (e) {
-                    c.SystemType = e.target.value;
-                    refreshKnownSystemTypesFromConnections();
-                    renderSystemTypeDatalist(view);
                 });
 
                 paramNameInput.addEventListener('input', function (e) {
@@ -390,9 +345,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 systemWrap.style.flexDirection = 'column';
                 systemWrap.style.gap = '0.3em';
                 appSelect.style.width = '100%';
-                customTypeInput.style.width = '100%';
                 systemWrap.appendChild(appSelect);
-                systemWrap.appendChild(customTypeInput);
 
                 var actionsWrap = document.createElement('span');
                 actionsWrap.style.display = 'inline-flex';
@@ -605,8 +558,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // Wires this tab's static controls once and does the first render.
         // Called by SyncChannel.js after all tab modules are loaded.
         function init(view) {
-            renderSystemTypeDatalist(view);
-            refreshKnownSystemTypesFromConnections();
             renderConnectionsTab(view);
             snapshotSaved();
 
@@ -630,7 +581,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             init: init,
             renderConnectionsTab: renderConnectionsTab,
             refreshDirtyState: refreshDirtyState,
-            renderSystemTypeDatalist: renderSystemTypeDatalist,
             hasUnsavedChanges: function () { return tracker.isDirty(store.get('connections')); },
             isSaving: function () { return saving; }
         };
