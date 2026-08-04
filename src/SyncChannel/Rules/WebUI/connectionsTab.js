@@ -349,17 +349,13 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 testBtn.className = 'ftIconBtn';
                 testBtn.style.cursor = 'pointer';
                 testBtn.innerText = '\uD83D\uDD0C Test';
-                var testStatus = document.createElement('span');
-                testStatus.style.fontSize = '0.8em';
-                testStatus.style.opacity = '0.7';
-
                 // Tests the LIVE field values on screen — works before Save
                 // as well as after, and persists LastTestSucceeded/
                 // LastTestedUtc onto the connection if it already exists.
                 testBtn.addEventListener('click', function () {
                     if (testBtn.dataset.busy === 'true') return;
                     testBtn.dataset.busy = 'true';
-                    testStatus.innerText = 'Testing\u2026';
+                    connBadge.innerText = 'Testing\u2026';
 
                     ApiClient.ajax({
                         type: 'POST',
@@ -374,19 +370,19 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         dataType: 'json'
                     }).then(function (result) {
                         testBtn.dataset.busy = 'false';
-                        testStatus.innerText = result.Success ? '\u2705 Reachable' : '\u274C ' + result.Message;
                         c.LastTestSucceeded = result.Success;
                         c.LastTestedUtc = new Date().toISOString();
-                        connBadge.innerText = helpers.connectionBadgeText(c);
+                        connBadge.innerText = result.Success
+                            ? helpers.connectionBadgeText(c)
+                            : '\u274C ' + result.Message + ' (' + new Date(c.LastTestedUtc).toLocaleString() + ')';
                     }).catch(function () {
                         testBtn.dataset.busy = 'false';
-                        testStatus.innerText = '\u274C Test request failed.';
+                        connBadge.innerText = '\u274C Test request failed.';
                     });
                 });
 
                 var statusWrap = document.createElement('span');
                 statusWrap.className = 'connStatusWrap';
-                statusWrap.appendChild(testStatus);
                 statusWrap.appendChild(connBadge);
 
                 var systemWrap = document.createElement('span');
