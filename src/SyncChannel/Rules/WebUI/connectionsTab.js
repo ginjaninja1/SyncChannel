@@ -438,13 +438,19 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     var serverRuleSets = (results[2] && results[2].RuleSets) || [];
                     var newSchemas = serverSchemas;
                     var newRuleSetsFile = { RuleSets: serverRuleSets };
-                    store.set('schemas', newSchemas, 'schemasChanged');
-                    store.set('ruleSetsFile', newRuleSetsFile, 'ruleSetsChanged');
+                    // Restore stable selections before notifying dependent tabs.
+                    // Their listeners render synchronously and may otherwise
+                    // fall back to the first built-in item during this gap.
+                    store.set('schemas', newSchemas);
+                    store.set('ruleSetsFile', newRuleSetsFile);
                     store.set('currentSchemaId', selectedSchemaId);
 
                     var matching = store.ruleSetsForSchema(selectedSchemaId);
                     var selectedRuleExists = newRuleSetsFile.RuleSets.some(function (rs) { return rs.Id === selectedRuleSetId; });
                     store.set('currentRuleSetId', selectedRuleExists ? selectedRuleSetId : (matching.length ? matching[0].rs.Id : ''));
+
+                    store.emit('schemasChanged');
+                    store.emit('ruleSetsChanged');
 
                     renderConnectionsTab(view);
                     store.emit('connectionsChanged');

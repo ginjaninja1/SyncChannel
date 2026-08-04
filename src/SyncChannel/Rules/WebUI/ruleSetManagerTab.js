@@ -18,6 +18,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         var lastRuleSetConnectionId = '';
         var lastRuleSetSchemaId = '';
         var savingRuleSets = false;
+        var publishingOwnRuleSetSave = false;
         var ruleSetsRestoreSnapshot = null;
 
         function canonicalRuleNode(node) {
@@ -123,6 +124,13 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             } else if (!matching.some(function (x) { return x.rs.Id === currentRuleSetId; })) {
                 store.set('currentRuleSetId', matching[0].rs.Id);
                 select.value = matching[0].rs.Id;
+            } else {
+                // Re-assert the stable selection after every option has been
+                // appended. Emby's enhanced select can otherwise keep the
+                // first appended option displayed after the save-triggered
+                // ruleSetsChanged render, even though the store still points
+                // at the rule set that was just saved.
+                select.value = currentRuleSetId;
             }
         }
 
@@ -364,7 +372,17 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 refreshRuleSetDirtyState(view);
                 var affected = (result && result.AffectedFolderCount) || 0;
                 statusEl.innerText = affected > 0 ? 'Saved. Folder tree resync started.' : 'Saved.';
-                store.emit('ruleSetsChanged');
+                // Dependants need to know that the committed rule definitions
+                // changed, but this editor is already rendering that exact
+                // live collection and selection. Rebuilding its own enhanced
+                // select here introduced an intermittent jump to the first
+                // (usually built-in) option after saving a duplicate.
+                publishingOwnRuleSetSave = true;
+                try {
+                    store.emit('ruleSetsChanged');
+                } finally {
+                    publishingOwnRuleSetSave = false;
+                }
                 savingRuleSets = false;
                 editorSession.setBusy(view, 'ruleSets', false);
             }).catch(function () {
@@ -609,6 +627,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 renderCanvasForCurrentIndex(view);
             });
             store.on('ruleSetsChanged', function () {
+                if (publishingOwnRuleSetSave) return;
                 renderRuleSetSelect(view);
                 renderCanvasForCurrentIndex(view);
                 snapshotRuleSetsSaved();

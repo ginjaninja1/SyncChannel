@@ -102,8 +102,24 @@ const dirtyTracker = loadAmdModule('dirtyTracker.js');
     assert.ok(ruleBuilder.includes('function buildGroupNode(data, isRoot, onChange, connectionId, schemaId, readOnly)'));
     const switchBody = /function switchRuleSetTo[\s\S]*?\n        }/.exec(ruleSets)[0];
     const schemaChangeBody = /function onSchemaChanged[\s\S]*?\n        }/.exec(ruleSets)[0];
+    const ruleSetSelectBody = /function renderRuleSetSelect[\s\S]*?\n        }/.exec(ruleSets)[0];
     assert.ok(!switchBody.includes('captureCurrentEditsIntoFile'));
     assert.ok(!schemaChangeBody.includes('captureCurrentEditsIntoFile'));
+    assert.ok(ruleSetSelectBody.includes('select.value = currentRuleSetId;'));
+    assert.ok(ruleSets.includes('publishingOwnRuleSetSave = true;'));
+    assert.ok(ruleSets.includes('if (publishingOwnRuleSetSave) return;'));
+
+    const connectionCollectionSet = connections.indexOf("store.set('schemas', newSchemas);");
+    const connectionSelectionRestore = connections.indexOf("store.set('currentSchemaId', selectedSchemaId);", connectionCollectionSet);
+    const connectionChangePublish = connections.indexOf("store.emit('schemasChanged');", connectionSelectionRestore);
+    assert.ok(connectionCollectionSet !== -1 && connectionCollectionSet < connectionSelectionRestore);
+    assert.ok(connectionSelectionRestore < connectionChangePublish);
+
+    const schemaCollectionSet = schemas.indexOf("store.set('schemas', newSchemas);");
+    const schemaSelectionRestore = schemas.indexOf("store.set('currentSchemaId', selectedSchemaExists ? selectedSchemaId : '');", schemaCollectionSet);
+    const schemaChangePublish = schemas.indexOf("store.emit('schemasChanged');", schemaSelectionRestore);
+    assert.ok(schemaCollectionSet !== -1 && schemaCollectionSet < schemaSelectionRestore);
+    assert.ok(schemaSelectionRestore < schemaChangePublish);
 
     assert.ok(connections.includes("type: 'DELETE'"));
     assert.ok(schemas.includes("ChannelSync/EndpointSchemas/"));

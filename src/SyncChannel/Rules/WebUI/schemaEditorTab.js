@@ -2261,11 +2261,22 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     var newSchemas = (results[0] && results[0].Schemas) || [];
                     var serverRuleSets = (results[1] && results[1].RuleSets) || [];
                     var newRuleSetsFile = { RuleSets: serverRuleSets };
-                    store.set('schemas', newSchemas, 'schemasChanged');
-                    store.set('ruleSetsFile', newRuleSetsFile, 'ruleSetsChanged');
-                    renderSchemaConnectionSelect(view);
-                    view.querySelector('#esConnectionSelect').value = selectedConnectionId;
-                    store.set('currentSchemaId', selectedSchemaId);
+                    // Publish the new collections and their selections as one
+                    // consistent state. Changed listeners render immediately.
+                    store.set('schemas', newSchemas);
+                    store.set('ruleSetsFile', newRuleSetsFile);
+                    var selectedSchemaExists = newSchemas.some(function (schema) {
+                        return schema.Id === selectedSchemaId && schema.ConnectionId === selectedConnectionId;
+                    });
+                    store.set('currentSchemaId', selectedSchemaExists ? selectedSchemaId : '');
+                    if (!newRuleSetsFile.RuleSets.some(function (ruleSet) {
+                        return ruleSet.Id === store.get('currentRuleSetId');
+                    })) {
+                        store.set('currentRuleSetId', '');
+                    }
+                    store.emit('schemasChanged');
+                    store.emit('ruleSetsChanged');
+                    renderSchemaConnectionSelect(view, selectedConnectionId);
                     renderSchemaSelect(view);
                     renderSchemaForm(view);
                     snapshotSchemasSaved();
