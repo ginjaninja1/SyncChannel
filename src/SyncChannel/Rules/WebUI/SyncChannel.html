@@ -5,17 +5,20 @@
 				#mcsTabs {
 				display: flex;
 				gap: 0.5em;
+				overflow-x: auto;
 				margin-bottom: 1.2em;
 				border-bottom: 1px solid rgba(255,255,255,0.12);
 				padding-bottom: 0.6em;
 				}
 				.mcsTabBtn {
 				background: transparent;
+				color: inherit;
 				border: 1px solid rgba(255,255,255,0.2);
 				border-radius: 999px;
 				padding: 0.4em 1em;
 				cursor: pointer;
 				opacity: 0.7;
+				white-space: nowrap;
 				}
 				.mcsTabBtn.mcsTabActive {
 				opacity: 1;
@@ -361,13 +364,11 @@
 				.mcsImportExportStatus { font-size:0.85em; opacity:0.6; }
 			</style>
 
-			<div is="emby-tabs" data-index="0" class="tabs-viewmenubar emby-tabs padded-left padded-right focusable scrollX">
-				<div class="tabs-viewmenubar-slider emby-tabs-slider nohoverfocus scrollSliderX">
-					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button emby-tab-button-active" data-index="0" data-tab="connections">1. Connections</a>
-					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="1" data-tab="schemas">2. Endpoint Schemas</a>
-					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="2" data-tab="ruleSets">3. Rule Sets</a>
-					<a href="#" is="emby-linkbutton" class="emby-button scroll-snap-start secondaryText emby-tab-button main-tab-button" data-index="3" data-tab="tree">4. Folder Tree</a>
-				</div>
+			<div id="mcsTabs" role="tablist" aria-label="Sync Channel configuration sections">
+				<button type="button" class="mcsTabBtn mcsTabActive" data-tab="connections" role="tab" aria-selected="true" aria-controls="tab-connections">1. Connections</button>
+				<button type="button" class="mcsTabBtn" data-tab="schemas" role="tab" aria-selected="false" aria-controls="tab-schemas">2. Endpoint Schemas</button>
+				<button type="button" class="mcsTabBtn" data-tab="ruleSets" role="tab" aria-selected="false" aria-controls="tab-ruleSets">3. Rule Sets</button>
+				<button type="button" class="mcsTabBtn" data-tab="tree" role="tab" aria-selected="false" aria-controls="tab-tree">4. Folder Tree</button>
 			</div>
 
 			<!-- ================= Connections tab ================= -->

@@ -23,12 +23,33 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function wireTabs(view) {
-            var buttons = view.querySelectorAll('.emby-tab-button');
+            var buttons = view.querySelectorAll('.mcsTabBtn');
+
+            function activateTab(btn) {
+                buttons.forEach(function (b) {
+                    var active = b === btn;
+                    b.classList.toggle('mcsTabActive', active);
+                    b.setAttribute('aria-selected', active ? 'true' : 'false');
+                });
+
+                view.querySelectorAll('.mcsTab').forEach(function (tab) {
+                    tab.classList.toggle('mcsTabVisible', tab.id === 'tab-' + btn.dataset.tab);
+                });
+
+                // The field palette (and its auto-hydrated discovery cache)
+                // otherwise only ever renders once, at initial page load --
+                // switching to this tab later never picked up newer state
+                // without this.
+                if (btn.dataset.tab === 'schemas') {
+                    schemaEditorTab.renderSchemaForm(view);
+                }
+            }
+
             buttons.forEach(function (btn) {
                 btn.addEventListener('click', function (e) {
                     e.preventDefault();
 
-                    if (!btn.classList.contains('emby-tab-button-active')) {
+                    if (!btn.classList.contains('mcsTabActive')) {
                         var blockingTab = unsavedChangesTabName();
                         if (blockingTab) {
                             alert('Save or discard your changes on the "' + blockingTab + '" tab before switching tabs.');
@@ -36,24 +57,24 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         }
                     }
 
-                    buttons.forEach(function (b) { b.classList.remove('emby-tab-button-active'); });
-                    btn.classList.add('emby-tab-button-active');
+                    activateTab(btn);
+                });
 
-                    view.querySelectorAll('.mcsTab').forEach(function (t) { t.classList.remove('mcsTabVisible'); });
-                    view.querySelector('#tab-' + btn.dataset.tab).classList.add('mcsTabVisible');
-
-                    // The field palette (and its auto-hydrated discovery cache)
-                    // otherwise only ever renders once, at initial page load --
-                    // switching to this tab later never picked up newer state
-                    // without this.
-                    if (btn.dataset.tab === 'schemas') {
-                        schemaEditorTab.renderSchemaForm(view);
-                    }
+                btn.addEventListener('keydown', function (e) {
+                    var index = Array.prototype.indexOf.call(buttons, btn);
+                    var targetIndex = null;
+                    if (e.key === 'ArrowLeft') targetIndex = (index + buttons.length - 1) % buttons.length;
+                    else if (e.key === 'ArrowRight') targetIndex = (index + 1) % buttons.length;
+                    else if (e.key === 'Home') targetIndex = 0;
+                    else if (e.key === 'End') targetIndex = buttons.length - 1;
+                    if (targetIndex === null) return;
+                    e.preventDefault();
+                    buttons[targetIndex].focus();
+                    buttons[targetIndex].click();
                 });
             });
 
-            buttons[0].classList.add('emby-tab-button-active');
-            view.querySelector('#tab-' + buttons[0].dataset.tab).classList.add('mcsTabVisible');
+            if (buttons.length) activateTab(buttons[0]);
         }
 
         // ===================================================================
@@ -108,6 +129,12 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         return function (view) {
             view.addEventListener('viewshow', function () {
                 applySurfaceBackgroundVariable(view);
+
+                // Emby may raise viewshow repeatedly for a cached page. Wiring
+                // again would stack click handlers and every tab module's store
+                // subscriptions, so initialize this view exactly once.
+                if (view.syncChannelInitialized) return;
+                view.syncChannelInitialized = true;
                 wireTabs(view);
                 loadAll(view);
             });

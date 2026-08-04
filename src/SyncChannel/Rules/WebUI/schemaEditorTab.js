@@ -2315,6 +2315,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             init: init,
             newSchema: newSchema,
             renderSchemaForm: renderSchemaForm,
-            hasUnsavedChanges: function () { return schemasHaveUnsavedChanges; }
+            hasUnsavedChanges: function () {
+                return schemasHaveUnsavedChanges || !!store.get('schemaOperationChangedRuleSets');
+            }
         };
     });
