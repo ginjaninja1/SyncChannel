@@ -67,7 +67,15 @@ strength. The live observations were made against Emby 4.10.0.22.
   every row becomes a Photo inside it.
 - Music catalogue (experimental): track rows are grouped by mapped Artist and
   Album identities. Artist, Album and Track provider IDs are independently
-  scoped. Emby's quality of library associations remains under test.
+  scoped. Live testing with an Emby Audio response confirmed that the emitted
+  Artist -> Album -> Track channel hierarchy is browsable and the Track leaves
+  play from mapped UNC `Path` values. This confirms the channel presentation;
+  it does not yet prove that the generated Artist/Album folders behave as
+  native, globally navigable Emby music-library entities.
+- Audio `Artists` and `AlbumArtists` are cardinality-aware: a native JSON list
+  is preserved as separate ordered associations, a scalar becomes one entry,
+  and missing values become an empty list. Comma-joined text is never split or
+  treated as multiple artists.
 - Advanced nested media retains explicit folder-depth and leaf settings.
 
 The low-level Emby object/media enums are internal except for the genuinely

@@ -140,7 +140,10 @@ namespace SyncChannel.Fetching
                             PosterUrl = ResolveMappingOrNullIfAnyFieldBlank(el, schema.PosterUrlField, connection, identity),
                             Artist = ResolveMapping(el, schema.ArtistField, connection, identity),
                             AlbumArtist = ResolveMapping(el, schema.AlbumArtistField, connection, identity),
+                            Artists = ResolveListMapping(el, schema.ArtistField, connection, identity),
+                            AlbumArtists = ResolveListMapping(el, schema.AlbumArtistField, connection, identity),
                             Album = ResolveMapping(el, schema.AlbumField, connection, identity),
+                            CatalogueArtist = ResolveMapping(el, schema.CatalogueArtistField, connection, identity),
                             MediaFileUrl = ResolveMappingOrNullIfAnyFieldBlank(el, schema.MediaFileUrlField, connection, identity),
                             ShowIdentity = ResolveMapping(el, schema.ShowIdentityField, connection, identity),
                             ShowTitle = ResolveMapping(el, schema.ShowTitleField, connection, identity),
@@ -189,6 +192,30 @@ namespace SyncChannel.Fetching
         private static int? ParseInt(string value)
         {
             return int.TryParse(value, out var parsed) ? parsed : (int?)null;
+        }
+
+        private static List<string> ResolveListMapping(
+            JsonElement element,
+            FieldMapping mapping,
+            ConnectionEntry connection,
+            string identity)
+        {
+            if (mapping?.Segments == null || mapping.Segments.Count == 0) return new List<string>();
+
+            // Preserve native JSON cardinality for the normal list mapping:
+            // one Field segment such as Artists or AlbumArtists.Name.
+            if (mapping.Segments.Count == 1 && mapping.Segments[0].Kind == MappingNodeKind.Field)
+            {
+                return RuleEvaluator.ResolveDisplayValues(element, mapping.Segments[0].Value)
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            // Literal/composed mappings remain useful and are coerced to a
+            // one-element list; they are never split on commas.
+            var scalar = ResolveMapping(element, mapping, connection, identity);
+            return string.IsNullOrWhiteSpace(scalar) ? new List<string>() : new List<string> { scalar };
         }
 
         private static void ResolveProviderIds(

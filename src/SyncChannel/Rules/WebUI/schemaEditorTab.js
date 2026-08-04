@@ -136,6 +136,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             ArtistField: [/^artist/i],
             AlbumArtistField: [/albumartist/i],
             AlbumField: [/^album/i],
+            CatalogueArtistField: [/albumartist/i],
             MediaFileUrlField: [/^url$/i, /fileurl/i, /mediaurl/i, /^path$/i]
             ,ShowIdentityField: [/seriesid/i, /showid/i, /series.*guid/i]
             ,ShowTitleField: [/series.*title/i, /show.*title/i, /series.*name/i, /show.*name/i]
@@ -158,7 +159,22 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         var rawJsonExpandedBySchemaId = {};
         var rawJsonStrippedBySchemaId = {};
 
-        var ROLE_WARN_IF_LIST = { PosterUrlField: true, MediaFileUrlField: true, ArtistField: true, AlbumArtistField: true };
+        // ArtistField and AlbumArtistField deliberately accept native lists;
+        // HttpFetchProvider preserves their values as separate associations.
+        // Every role below still requires one scalar result.
+        var ROLE_WARN_IF_LIST = {
+            PosterUrlField: true,
+            MediaFileUrlField: true,
+            CatalogueArtistField: true,
+            ArtistIdentityField: true,
+            AlbumIdentityField: true,
+            ShowIdentityField: true,
+            ShowTitleField: true,
+            ShowPosterUrlField: true,
+            SeasonNumberField: true,
+            SeasonTitleField: true,
+            EpisodeNumberField: true
+        };
 
         function roleFieldWarning(role, fieldType) {
             if (fieldType === 'List' && ROLE_WARN_IF_LIST[role]) {
@@ -193,6 +209,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 ArtistField: emptyMapping(),
                 AlbumArtistField: emptyMapping(),
                 AlbumField: emptyMapping(),
+                CatalogueArtistField: emptyMapping(),
                 ShowIdentityField: emptyMapping(),
                 ShowTitleField: emptyMapping(),
                 ShowOverviewField: emptyMapping(),
@@ -1413,12 +1430,16 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             }
 
             if ((schema.ObjectKind === 'FlatMedia' && schema.LeafMediaType === 'Audio') || schema.ObjectKind === 'MusicArtistAlbum') {
-                container.appendChild(buildMappingRow(schema.ArtistField, mapperConnId, schema.Id, 'Artist field', null, locked, 'ArtistField'));
-                container.appendChild(buildMappingRow(schema.AlbumArtistField, mapperConnId, schema.Id, 'Album artist field', null, locked, 'AlbumArtistField'));
+                container.appendChild(buildMappingRow(schema.ArtistField, mapperConnId, schema.Id, 'Track artists field (list)',
+                    'Accepts zero, one or many values. A JSON array is preserved as separate Emby artist associations.', locked, 'ArtistField'));
+                container.appendChild(buildMappingRow(schema.AlbumArtistField, mapperConnId, schema.Id, 'Track album artists field (list)',
+                    'Accepts zero, one or many values. For Emby responses, AlbumArtists.Name preserves the full list.', locked, 'AlbumArtistField'));
                 container.appendChild(buildMappingRow(schema.AlbumField, mapperConnId, schema.Id, 'Album field', null, locked, 'AlbumField'));
             }
 
             if (schema.Presentation === 'MusicCatalogueExperimental') {
+                container.appendChild(buildMappingRow(schema.CatalogueArtistField, mapperConnId, schema.Id, 'Catalogue artist name field',
+                    'Required scalar used for the Artist folder. Usually AlbumArtist, or the first AlbumArtists.Name value.', locked, 'CatalogueArtistField'));
                 container.appendChild(buildMappingRow(schema.ArtistIdentityField, mapperConnId, schema.Id, 'Artist identity field',
                     'Required for deterministic grouping. Rows with the same value share an Artist.', locked, 'ArtistIdentityField'));
                 container.appendChild(buildMappingRow(schema.AlbumIdentityField, mapperConnId, schema.Id, 'Album identity field',
@@ -1930,7 +1951,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                         'ShowPosterUrlField', 'SeasonNumberField', 'SeasonTitleField', 'EpisodeNumberField']);
                 }
                 if (schema.Presentation === 'MusicCatalogueExperimental') {
-                    applicableRoles = applicableRoles.concat(['ArtistIdentityField', 'AlbumIdentityField']);
+                    applicableRoles = applicableRoles.concat(['CatalogueArtistField', 'ArtistIdentityField', 'AlbumIdentityField']);
                 }
 
                 applicableRoles.forEach(function (role) {
@@ -2394,7 +2415,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 (!mapped(currentSchema.ShowIdentityField) || !mapped(currentSchema.ShowTitleField))) {
                 requiredMessage = 'Playable items as episodes requires Show identity and Show title mappings.';
             } else if (currentSchema && currentSchema.Presentation === 'MusicCatalogueExperimental' &&
-                (!mapped(currentSchema.ArtistIdentityField) || !mapped(currentSchema.ArtistField) ||
+                (!mapped(currentSchema.ArtistIdentityField) || !mapped(currentSchema.CatalogueArtistField) || !mapped(currentSchema.ArtistField) ||
                  !mapped(currentSchema.AlbumIdentityField) || !mapped(currentSchema.AlbumField) || !mapped(currentSchema.MediaFileUrlField))) {
                 requiredMessage = 'Music catalogue requires Artist identity/name, Album identity/title, and Media item mappings.';
             } else if (currentSchema && currentSchema.Presentation === 'AudioTracks' && !mapped(currentSchema.MediaFileUrlField)) {

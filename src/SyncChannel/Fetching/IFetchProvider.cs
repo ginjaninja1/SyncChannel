@@ -52,7 +52,10 @@ namespace SyncChannel.Fetching
         // real typed classes).
         public string Artist { get; set; } = string.Empty;
         public string AlbumArtist { get; set; } = string.Empty;
+        public List<string> Artists { get; set; } = new List<string>();
+        public List<string> AlbumArtists { get; set; } = new List<string>();
         public string Album { get; set; } = string.Empty;
+        public string CatalogueArtist { get; set; } = string.Empty;
 
         // The actual playable/viewable media URL or local path. This is
         // distinct from PosterUrl: a poster describes an item, while this

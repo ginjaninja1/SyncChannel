@@ -65,7 +65,10 @@ namespace SyncChannel.Models
         // MusicArtistAlbum kind only — see FetchedItem for the source of these.
         public string Artist { get; set; } = string.Empty;
         public string AlbumArtist { get; set; } = string.Empty;
+        public List<string> Artists { get; set; } = new List<string>();
+        public List<string> AlbumArtists { get; set; } = new List<string>();
         public string Album { get; set; } = string.Empty;
+        public string CatalogueArtist { get; set; } = string.Empty;
 
         // Playable/viewable source for every media-bearing destination.
         public string MediaFileUrl { get; set; } = string.Empty;

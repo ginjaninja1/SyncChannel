@@ -279,7 +279,9 @@ namespace SyncChannel.Channels
                 var artist = new ChannelItemInfo
                 {
                     Id = CatalogueArtistIdPrefix + targetNode.Id + "::" + first.ProviderKey + "::" + first.ArtistIdentity,
-                    Name = string.IsNullOrWhiteSpace(first.Artist) ? first.ArtistIdentity : first.Artist,
+                    Name = !string.IsNullOrWhiteSpace(first.CatalogueArtist)
+                        ? first.CatalogueArtist
+                        : (first.AlbumArtists.FirstOrDefault() ?? first.ArtistIdentity),
                     ImageUrl = first.PosterUrl,
                     Type = ChannelItemType.Folder,
                     FolderType = ChannelFolderType.MusicArtist,
@@ -452,8 +454,8 @@ namespace SyncChannel.Channels
                     Type = ChannelItemType.Media,
                     MediaType = ChannelMediaType.Audio,
                     ContentType = ChannelMediaContentType.Song,
-                    Artists = string.IsNullOrWhiteSpace(source.Artist) ? null : new List<string> { source.Artist },
-                    AlbumArtists = string.IsNullOrWhiteSpace(source.AlbumArtist) ? null : new List<string> { source.AlbumArtist },
+                    Artists = MappedNames(source.Artists, source.Artist),
+                    AlbumArtists = MappedNames(source.AlbumArtists, source.AlbumArtist),
                     ForceUpdate = true
                 };
                 TrySetChannelItemAlbum(track, source.Album);
@@ -1008,8 +1010,8 @@ namespace SyncChannel.Channels
 
             if (item.LeafMediaType == LeafMediaType.Audio)
             {
-                info.Artists = string.IsNullOrWhiteSpace(item.Artist) ? null : new List<string> { item.Artist };
-                info.AlbumArtists = string.IsNullOrWhiteSpace(item.AlbumArtist) ? null : new List<string> { item.AlbumArtist };
+                info.Artists = MappedNames(item.Artists, item.Artist);
+                info.AlbumArtists = MappedNames(item.AlbumArtists, item.AlbumArtist);
                 TrySetChannelItemAlbum(info, item.Album);
             }
 
@@ -1178,8 +1180,8 @@ namespace SyncChannel.Channels
                 ContentType = ChannelMediaContentType.Song,
                 IndexNumber = 1,
                 ParentIndexNumber = 1,
-                Artists = string.IsNullOrEmpty(source?.Artist) ? null : new List<string> { source.Artist },
-                AlbumArtists = string.IsNullOrEmpty(source?.AlbumArtist) ? null : new List<string> { source.AlbumArtist },
+                Artists = source == null ? null : MappedNames(source.Artists, source.Artist),
+                AlbumArtists = source == null ? null : MappedNames(source.AlbumArtists, source.AlbumArtist),
                 ForceUpdate = true
             };
             TrySetChannelItemAlbum(song, source?.Album);
@@ -1333,8 +1335,8 @@ namespace SyncChannel.Channels
 
             if (source.LeafMediaType == LeafMediaType.Audio)
             {
-                leaf.Artists = string.IsNullOrWhiteSpace(source.Artist) ? null : new List<string> { source.Artist };
-                leaf.AlbumArtists = string.IsNullOrWhiteSpace(source.AlbumArtist) ? null : new List<string> { source.AlbumArtist };
+                leaf.Artists = MappedNames(source.Artists, source.Artist);
+                leaf.AlbumArtists = MappedNames(source.AlbumArtists, source.AlbumArtist);
                 TrySetChannelItemAlbum(leaf, source.Album);
             }
 
@@ -1344,6 +1346,12 @@ namespace SyncChannel.Channels
         // Explicit, not Enum.Parse-by-name — deliberately a hard mapping so
         // a mismatch fails to compile rather than silently misrouting at
         // runtime if either enum's members are ever reordered.
+        private static List<string> MappedNames(List<string> values, string scalarFallback)
+        {
+            if (values != null && values.Count > 0) return values;
+            return string.IsNullOrWhiteSpace(scalarFallback) ? null : new List<string> { scalarFallback };
+        }
+
         private static ChannelMediaType ToChannelMediaType(LeafMediaType type)
         {
             switch (type)
