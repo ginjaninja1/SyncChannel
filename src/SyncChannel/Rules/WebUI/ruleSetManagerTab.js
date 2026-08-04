@@ -14,6 +14,47 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             return store.ruleSetsForSchema(schemaId);
         }
 
+        var lastRuleSetConnectionId = '';
+        var lastRuleSetSchemaId = '';
+
+        function rememberRuleSetNavigation(view) {
+            lastRuleSetConnectionId = view.querySelector('#rcsConnectionSelect').value;
+            lastRuleSetSchemaId = view.querySelector('#rcsSchemaSelect').value;
+        }
+
+        function restoreRuleSetNavigation(view) {
+            var connSel = view.querySelector('#rcsConnectionSelect');
+            var schemaSel = view.querySelector('#rcsSchemaSelect');
+            var currentRuleSetIndex = store.get('currentRuleSetIndex');
+            var ruleSetsFile = store.get('ruleSetsFile');
+            var currentRuleSet = currentRuleSetIndex >= 0
+                ? ruleSetsFile.RuleSets[currentRuleSetIndex]
+                : null;
+            var currentSchema = currentRuleSet
+                ? store.get('schemas').filter(function (schema) {
+                    return schema.Id === currentRuleSet.EndpointSchemaId;
+                })[0]
+                : null;
+            var connectionId = currentSchema ? currentSchema.ConnectionId : lastRuleSetConnectionId;
+            var schemaId = currentSchema ? currentSchema.Id : lastRuleSetSchemaId;
+
+            if (store.get('connections').some(function (connection) { return connection.Id === connectionId; })) {
+                connSel.value = connectionId;
+            }
+            rebuildRuleSetsSchemaOptions(view);
+            if (store.schemasForConnection(connSel.value).some(function (schema) { return schema.Id === schemaId; })) {
+                schemaSel.value = schemaId;
+            }
+            renderRuleSetSelect(view);
+        }
+
+        function blockDirtyRuleSetNavigation(view, destinationName) {
+            if (!store.isRuleSetsDirty()) return false;
+            alert('Save or discard your Rule Set changes before switching ' + destinationName + '.');
+            restoreRuleSetNavigation(view);
+            return true;
+        }
+
         function captureCurrentEditsIntoFile(view) {
             var currentRuleSetIndex = store.get('currentRuleSetIndex');
             if (currentRuleSetIndex < 0) return;
@@ -163,6 +204,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             if (store.schemasForConnection(connSel.value).some(function (s) { return s.Id === priorSchemaId; })) {
                 schemaSel.value = priorSchemaId;
             }
+            rememberRuleSetNavigation(view);
 
             // Guarded the same way refreshBtn already is below -- this function
             // is called after every save (Connections, Endpoint Schemas) plus
@@ -173,14 +215,20 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             if (!connSel.dataset.wired) {
                 connSel.dataset.wired = '1';
                 connSel.addEventListener('change', function () {
+                    if (blockDirtyRuleSetNavigation(view, 'connections')) return;
                     rebuildRuleSetsSchemaOptions(view);
                     onSchemaChanged(view);
+                    rememberRuleSetNavigation(view);
                 });
             }
 
             if (!schemaSel.dataset.wired) {
                 schemaSel.dataset.wired = '1';
-                schemaSel.addEventListener('change', function () { onSchemaChanged(view); });
+                schemaSel.addEventListener('change', function () {
+                    if (blockDirtyRuleSetNavigation(view, 'schemas')) return;
+                    onSchemaChanged(view);
+                    rememberRuleSetNavigation(view);
+                });
             }
 
             var refreshBtn = view.querySelector('#rcsRefreshFieldsBtn');
@@ -190,6 +238,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     var connectionId = view.querySelector('#rcsConnectionSelect').value;
                     var schemaId = view.querySelector('#rcsSchemaSelect').value;
                     if (!connectionId || !schemaId) return;
+
+                    // Refresh rebuilds the canvas just like navigation does.
+                    // Persist the live DOM first so an unsaved custom rule or
+                    // built-in draft is rendered back instead of disappearing.
+                    captureCurrentEditsIntoFile(view);
 
                     // forceRefresh=true bypasses both this client's cache and
                     // the server's LastResponseCacheStore — a plain client-side
@@ -393,6 +446,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         function wireRuleSetToolbar(view) {
             view.querySelector('#rcsRuleSetSelect').addEventListener('change', function (e) {
+                if (blockDirtyRuleSetNavigation(view, 'Rule Sets')) return;
                 switchRuleSetTo(view, parseInt(e.target.value, 10));
             });
 
