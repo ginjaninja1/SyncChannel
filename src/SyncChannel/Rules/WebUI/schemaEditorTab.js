@@ -204,9 +204,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             };
         }
 
-        function renderSchemaConnectionSelect(view) {
+        function renderSchemaConnectionSelect(view, preferredConnectionId) {
             var select = view.querySelector('#esConnectionSelect');
-            var prior = select.value;
+            var prior = preferredConnectionId || select.value;
             select.innerHTML = '';
             var connections = store.get('connections');
             connections.forEach(function (c) {
@@ -223,7 +223,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 select.addEventListener('change', function () {
                     if (schemasHaveUnsavedChanges) {
                         alert('Save or discard your schema changes before switching connections.');
-                        select.value = lastConnectionSelectValue;
+                        var currentSchema = store.currentSchema();
+                        select.value = currentSchema ? currentSchema.ConnectionId : lastConnectionSelectValue;
                         return;
                     }
                     lastConnectionSelectValue = select.value;
@@ -2115,23 +2116,39 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var selectedRule = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
             var selectedRuleId = selectedRule ? selectedRule.Id : '';
             var restoredSchemas = JSON.parse(schemasSavedSnapshot);
+            var restoredSelectedSchema = restoredSchemas.filter(function (schema) {
+                return schema.Id === selectedSchemaId;
+            })[0] || null;
+            // A schema's owner is the authoritative connection selection.
+            // The select's DOM value may still be the connection the user
+            // just attempted to switch to when the dirty guard intervened.
+            // Restoring that transient value alongside a schema owned by the
+            // previous connection makes renderSchemaSelect reject the pair
+            // and clear currentSchemaId, leaving a misleading empty editor.
+            var restoredConnectionId = restoredSelectedSchema
+                ? restoredSelectedSchema.ConnectionId
+                : selectedConnectionId;
+            var connections = store.get('connections');
+            if (!connections.some(function (connection) { return connection.Id === restoredConnectionId; })) {
+                restoredConnectionId = connections.length ? connections[0].Id : '';
+            }
+            var restoredSchemaId = restoredSelectedSchema && restoredSelectedSchema.ConnectionId === restoredConnectionId
+                ? restoredSelectedSchema.Id
+                : '';
             if (schemaOperationChangedRuleSets && schemaRuleSetsSavedSnapshot) {
                 store.set('ruleSetsFile', JSON.parse(schemaRuleSetsSavedSnapshot), 'ruleSetsChanged');
             }
             store.set('schemaOperationChangedRuleSets', false);
             schemasHaveUnsavedChanges = false;
-            store.set('schemas', restoredSchemas, 'schemasChanged');
-
-            renderSchemaConnectionSelect(view);
-            var connections = store.get('connections');
-            if (connections.some(function (connection) { return connection.Id === selectedConnectionId; })) {
-                view.querySelector('#esConnectionSelect').value = selectedConnectionId;
-            }
-            store.set('currentSchemaId', restoredSchemas.some(function (schema) { return schema.Id === selectedSchemaId; })
-                ? selectedSchemaId : '');
-            renderSchemaSelect(view);
+            // Publish a consistent collection/selection state. Emitting
+            // schemasChanged between replacing the collection and restoring
+            // currentSchemaId exposes an invalid intermediate state to every
+            // dependent tab and makes their renders order-dependent.
+            store.set('schemas', restoredSchemas);
+            store.set('currentSchemaId', restoredSchemaId);
+            renderSchemaConnectionSelect(view, restoredConnectionId);
             renderSchemaForm(view);
-            ruleSetManagerTab.renderConnectionAndSchemaSelects(view);
+            store.emit('schemasChanged');
             var restoredRuleIndex = store.get('ruleSetsFile').RuleSets.findIndex(function (ruleSet) {
                 return ruleSet.Id === selectedRuleId;
             });
