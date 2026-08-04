@@ -2073,8 +2073,23 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         var schemasSavedSnapshot = null;
         var schemaRuleSetsSavedSnapshot = null;
         var builtInSchemaOriginals = {};
+        var builtInSchemaComparisonSnapshots = {};
         var schemasHaveUnsavedChanges = false;
         var activeView = null;
+
+        // Mapping nodes acquire CachedType while they are rendered so the UI
+        // can validate Array functions against the discovery palette. It is
+        // session-only metadata, is not part of EndpointSchema on the server,
+        // and deliberately does not mark the editor dirty. Exclude it from
+        // built-in edit detection; otherwise merely inspecting a built-in can
+        // make Save treat it as modified while the visible dirty state remains
+        // clean. Keep this as a recursive serializer so CachedType is ignored
+        // at any depth in nested Function children.
+        function schemaForEditComparison(schema) {
+            return JSON.stringify(schema, function (key, value) {
+                return key === 'CachedType' ? undefined : value;
+            });
+        }
 
         function snapshotSchemasSaved() {
             var schemas = store.get('schemas');
@@ -2082,8 +2097,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             schemaRuleSetsSavedSnapshot = JSON.stringify(store.get('ruleSetsFile'));
             schemasHaveUnsavedChanges = false;
             builtInSchemaOriginals = {};
+            builtInSchemaComparisonSnapshots = {};
             schemas.filter(function (schema) { return schema.IsBuiltIn; }).forEach(function (schema) {
                 builtInSchemaOriginals[schema.Id] = JSON.stringify(schema);
+                builtInSchemaComparisonSnapshots[schema.Id] = schemaForEditComparison(schema);
             });
         }
 
@@ -2175,8 +2192,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         function saveEditedBuiltInsAsCopies() {
             var schemas = store.get('schemas');
             var edits = schemas.filter(function (schema) {
-                return schema.IsBuiltIn && builtInSchemaOriginals[schema.Id] &&
-                    JSON.stringify(schema) !== builtInSchemaOriginals[schema.Id];
+                return schema.IsBuiltIn && builtInSchemaComparisonSnapshots[schema.Id] &&
+                    schemaForEditComparison(schema) !== builtInSchemaComparisonSnapshots[schema.Id];
             });
             if (!edits.length) return true;
 
@@ -2358,6 +2375,28 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderSchemaConnectionSelect(view);
             renderSchemaForm(view);
             snapshotSchemasSaved();
+
+            // Connections are saved independently from this tab. That save
+            // reloads the server's built-in schemas and replaces the shared
+            // schema collection (while preserving local custom schemas). The
+            // replacement is authoritative saved state, so an idle schema
+            // editor must adopt it as its new comparison baseline. Otherwise
+            // saveEditedBuiltInsAsCopies compares the freshly reloaded object
+            // with the pre-connection-save snapshot and can report an
+            // untouched built-in (for example Radarr's Movies schema) as an
+            // edit while saving a new custom schema on another connection.
+            //
+            // Never re-baseline over real schema-side work. Schema operations
+            // which also copy/delete Rule Sets use the second flag and need
+            // the original schema and Rule Set snapshots for Discard.
+            store.on('schemasChanged', function () {
+                renderSchemaConnectionSelect(view);
+                renderSchemaForm(view);
+                if (!schemasHaveUnsavedChanges && !store.get('schemaOperationChangedRuleSets')) {
+                    snapshotSchemasSaved();
+                    refreshSchemaDirtyState(view);
+                }
+            });
 
             store.on('connectionsChanged', function () {
                 renderSchemaConnectionSelect(view);
