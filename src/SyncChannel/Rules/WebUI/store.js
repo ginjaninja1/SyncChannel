@@ -2,65 +2,28 @@ define([], function () {
     'use strict';
 
     // ===================================================================
-    // Single owner of all cross-tab mutable state. Nothing outside this
-    // module ever assigns to these directly — always through a store
-    // method, so every mutation has exactly one place it could have gone
-    // wrong. Tabs subscribe to the events they care about instead of
-    // calling each other's render functions.
+    // Shared committed/working collections and stable selections. Editors
+    // may mutate only their own working collection; dependent-tab events are
+    // published after Save or Discard, never for another screen's draft.
     // ===================================================================
 
     var state = {
         connections: [],
         connectionsSavedSnapshot: null,
         connectionsSavedFullSnapshot: null,
-        pendingConnectionRemovals: {},
-        connectionSchemaOrder: {},
-        connectionRuleOrder: {},
 
         schemas: [],
         currentSchemaId: '',
 
         ruleSetsFile: null,
-        currentRuleSetIndex: -1,
+        currentRuleSetId: '',
         ruleSetsSavedSnapshot: null,
-        ruleSetsHaveUnsavedChanges: false,
-        ruleSetDomEditedById: {},
-        builtInRuleDraftRootsById: {},
 
         persistedConnectionIds: {},
-        schemaOperationChangedRuleSets: false,
-
         currentTree: null
     };
 
     var listeners = {};
-
-    // Shared between ruleBuilderTab (marks a rule set edited on every
-    // keystroke/drag) and ruleSetManagerTab (reads it to render the
-    // warning banner, clears it on save/discard) — lives here rather than
-    // in either tab so neither needs a direct dependency on the other.
-    // Flag-based, not a content diff: matches the original
-    // ruleSetDomEditedById behavior — any edit marks the rule set dirty
-    // until the next save/discard, rather than comparing serialized trees.
-    function markRuleSetEdited(ruleSetId) {
-        if (!ruleSetId) return;
-        var edited = state.ruleSetDomEditedById;
-        edited[ruleSetId] = true;
-        state.ruleSetsHaveUnsavedChanges = true;
-    }
-
-    function isRuleSetEdited(ruleSetId) {
-        return !!state.ruleSetDomEditedById[ruleSetId];
-    }
-
-    function clearRuleSetEditFlags() {
-        state.ruleSetDomEditedById = {};
-        state.ruleSetsHaveUnsavedChanges = false;
-    }
-
-    function isRuleSetsDirty() {
-        return state.ruleSetsSavedSnapshot !== null && state.ruleSetsHaveUnsavedChanges;
-    }
 
     function on(eventName, handler) {
         (listeners[eventName] = listeners[eventName] || []).push(handler);
@@ -157,17 +120,28 @@ define([], function () {
         return schema ? findConnection(schema.ConnectionId) : null;
     }
 
-    // Read-only structural query against the folder tree, used by the
-    // Connections tab to block removing a connection whose Rule Sets are
-    // still wired to a Folder Fetch. Lives here (not in folderTreeTab)
-    // because it's a pure query over state.currentTree, not a render —
-    // callers never need folderTreeTab's DOM/rendering code just to ask
-    // this question.
-    function folderTreeUsesAnyRuleSet(node, ruleSetIds) {
-        if (!node) return false;
-        var fetches = node.Fetches || [];
-        if (fetches.some(function (f) { return ruleSetIds.indexOf(f.RuleSetId) !== -1; })) return true;
-        return (node.Children || []).some(function (child) { return folderTreeUsesAnyRuleSet(child, ruleSetIds); });
+    // Read-only structural query shared by every destructive editor action.
+    // Returning references (rather than a second boolean-only check) keeps
+    // the decision and the actionable dependency message based on exactly
+    // the same result.
+    function folderTreeReferencesForRuleSets(node, ruleSetIds, parentPath) {
+        if (!node) return [];
+        var path = (parentPath || []).concat([node.DisplayName || '(unnamed folder)']);
+        var result = (node.Fetches || [])
+            .filter(function (fetch) { return ruleSetIds.indexOf(fetch.RuleSetId) !== -1; })
+            .map(function (fetch) {
+                return {
+                    FolderId: node.Id,
+                    FetchId: fetch.Id,
+                    RuleSetId: fetch.RuleSetId,
+                    Path: path.join(' → '),
+                    FetchName: fetch.DisplayLabel || '(unnamed fetch)'
+                };
+            });
+        (node.Children || []).forEach(function (child) {
+            result = result.concat(folderTreeReferencesForRuleSets(child, ruleSetIds, path));
+        });
+        return result;
     }
 
     return {
@@ -188,11 +162,7 @@ define([], function () {
         ruleSetNameExists: ruleSetNameExists,
         schemaForRuleSetId: schemaForRuleSetId,
         connectionForRuleSetId: connectionForRuleSetId,
-        folderTreeUsesAnyRuleSet: folderTreeUsesAnyRuleSet,
-        ruleSetsForSchema: ruleSetsForSchema,
-        markRuleSetEdited: markRuleSetEdited,
-        isRuleSetEdited: isRuleSetEdited,
-        clearRuleSetEditFlags: clearRuleSetEditFlags,
-        isRuleSetsDirty: isRuleSetsDirty
+        folderTreeReferencesForRuleSets: folderTreeReferencesForRuleSets,
+        ruleSetsForSchema: ruleSetsForSchema
     };
 });

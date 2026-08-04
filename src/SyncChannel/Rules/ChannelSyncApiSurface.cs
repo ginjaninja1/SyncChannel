@@ -16,14 +16,17 @@
     // ---- Connections ----
     [Route("/ChannelSync/Connections", "GET")] public class GetConnections : IReturn<ConnectionsFile> { }
     [Route("/ChannelSync/Connections", "POST")] public class SaveConnections : IReturn<object> { public ConnectionsFile Payload { get; set; } }
+    [Route("/ChannelSync/Connections/{Id}", "DELETE")] public class DeleteConnection : IReturn<object> { public string Id { get; set; } }
 
     // ---- Endpoint schemas ----
     [Route("/ChannelSync/EndpointSchemas", "GET")] public class GetEndpointSchemas : IReturn<EndpointSchemasFile> { }
     [Route("/ChannelSync/EndpointSchemas", "POST")] public class SaveEndpointSchemas : IReturn<object> { public EndpointSchemasFile Payload { get; set; } }
+    [Route("/ChannelSync/EndpointSchemas/{Id}", "DELETE")] public class DeleteEndpointSchema : IReturn<object> { public string Id { get; set; } }
 
     // ---- Rule sets ----
     [Route("/ChannelSync/RuleSets", "GET")] public class GetRuleSets : IReturn<RuleSetsFile> { }
     [Route("/ChannelSync/RuleSets", "POST")] public class SaveRuleSets : IReturn<object> { public RuleSetsFile Payload { get; set; } }
+    [Route("/ChannelSync/RuleSets/{Id}", "DELETE")] public class DeleteRuleSet : IReturn<object> { public string Id { get; set; } }
 
     // ---- Live preview (cache-first: fetches live only if nothing cached
     // yet for this connection+schema pair, otherwise always reuses the
@@ -210,6 +213,60 @@
             return new { Success = true, AffectedFolderCount = affectedFolders.Count };
         }
 
+        public object Delete(DeleteConnection r)
+        {
+            var originalConnections = connectionsStore.Load();
+            var existing = originalConnections.Connections.FirstOrDefault(
+                c => string.Equals(c.Id, r.Id, StringComparison.OrdinalIgnoreCase));
+            if (existing == null)
+                return CurrentConfigurationResponse();
+
+            var dependentFolders = FindFoldersUsingConnection(treeStore.Load().RootFolder, r.Id);
+            if (dependentFolders.Count > 0)
+                return new
+                {
+                    Success = false,
+                    Error = "Remove or reassign every Folder Fetch using this Connection before deleting it.",
+                    DependentFolderIds = dependentFolders
+                };
+
+            var originalSchemas = schemaStore.Load();
+            var originalRules = ruleSetStore.Load();
+            var nextConnections = Clone(originalConnections);
+            var nextSchemas = Clone(originalSchemas);
+            var nextRules = Clone(originalRules);
+            var deletedSchemaIds = new HashSet<string>(
+                nextSchemas.Schemas
+                    .Where(s => string.Equals(s.ConnectionId, r.Id, StringComparison.OrdinalIgnoreCase))
+                    .Select(s => s.Id),
+                StringComparer.OrdinalIgnoreCase);
+
+            nextConnections.Connections.RemoveAll(c => string.Equals(c.Id, r.Id, StringComparison.OrdinalIgnoreCase));
+            nextSchemas.Schemas.RemoveAll(s => deletedSchemaIds.Contains(s.Id));
+            nextRules.RuleSets.RemoveAll(rs => deletedSchemaIds.Contains(rs.EndpointSchemaId));
+
+            try
+            {
+                schemaStore.Save(nextSchemas);
+                ruleSetStore.Save(nextRules);
+                connectionsStore.Save(nextConnections);
+                var ensuredSchemas = schemaStore.EnsureBuiltIns(nextConnections.Connections);
+                var ensuredRules = ruleSetStore.EnsureBuiltIns(ensuredSchemas.Schemas);
+                return new
+                {
+                    Success = true,
+                    Connections = nextConnections.Connections,
+                    Schemas = ensuredSchemas.Schemas,
+                    RuleSets = ensuredRules.RuleSets
+                };
+            }
+            catch
+            {
+                RestoreConfiguration(originalConnections, originalSchemas, originalRules);
+                throw;
+            }
+        }
+
         private List<string> FindFoldersUsingConnection(FolderNode node, string connectionId)
         {
             var result = new List<string>();
@@ -308,6 +365,55 @@
             return new { Success = true, AffectedFolderCount = affectedFolders.Count };
         }
 
+        public object Delete(DeleteEndpointSchema r)
+        {
+            var originalSchemas = schemaStore.Load();
+            var existing = originalSchemas.Schemas.FirstOrDefault(
+                s => string.Equals(s.Id, r.Id, StringComparison.OrdinalIgnoreCase));
+            if (existing == null)
+                return CurrentConfigurationResponse();
+            if (existing.IsBuiltIn)
+                return new { Success = false, Error = "Built-in Schemas cannot be deleted." };
+
+            var originalRules = ruleSetStore.Load();
+            var deletedRuleIds = originalRules.RuleSets
+                .Where(rs => string.Equals(rs.EndpointSchemaId, r.Id, StringComparison.OrdinalIgnoreCase))
+                .Select(rs => rs.Id)
+                .ToList();
+            var treeRoot = treeStore.Load().RootFolder;
+            var dependentFolders = deletedRuleIds
+                .SelectMany(id => RuleSetStore.FindFoldersUsingRuleSet(treeRoot, id))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (dependentFolders.Count > 0)
+                return new
+                {
+                    Success = false,
+                    Error = "Remove or reassign every Folder Fetch using this Schema's Rule Sets before deleting it.",
+                    DependentFolderIds = dependentFolders
+                };
+
+            var nextSchemas = Clone(originalSchemas);
+            var nextRules = Clone(originalRules);
+            nextSchemas.Schemas.RemoveAll(s => string.Equals(s.Id, r.Id, StringComparison.OrdinalIgnoreCase));
+            nextRules.RuleSets.RemoveAll(rs => string.Equals(rs.EndpointSchemaId, r.Id, StringComparison.OrdinalIgnoreCase));
+
+            try
+            {
+                ruleSetStore.Save(nextRules);
+                schemaStore.Save(nextSchemas);
+                var ensuredSchemas = schemaStore.EnsureBuiltIns(connectionsStore.Load().Connections);
+                var ensuredRules = ruleSetStore.EnsureBuiltIns(ensuredSchemas.Schemas);
+                return new { Success = true, Schemas = ensuredSchemas.Schemas, RuleSets = ensuredRules.RuleSets };
+            }
+            catch
+            {
+                TryRestore(() => schemaStore.Save(originalSchemas), "Schemas");
+                TryRestore(() => ruleSetStore.Save(originalRules), "Rule Sets");
+                throw;
+            }
+        }
+
         public object Get(GetRuleSets r)
         {
             var schemas = schemaStore.EnsureBuiltIns(connectionsStore.Load().Connections);
@@ -384,6 +490,39 @@
             }
 
             return new { Success = true, AffectedFolderCount = affectedFolders.Count, ChangedRuleSetCount = changedIds.Count };
+        }
+
+        public object Delete(DeleteRuleSet r)
+        {
+            var originalRules = ruleSetStore.Load();
+            var existing = originalRules.RuleSets.FirstOrDefault(
+                rs => string.Equals(rs.Id, r.Id, StringComparison.OrdinalIgnoreCase));
+            if (existing == null)
+                return new { Success = true, RuleSets = originalRules.RuleSets };
+            if (existing.IsBuiltIn)
+                return new { Success = false, Error = "Built-in Rule Sets cannot be deleted." };
+            var dependentFolders = RuleSetStore.FindFoldersUsingRuleSet(treeStore.Load().RootFolder, r.Id);
+            if (dependentFolders.Count > 0)
+                return new
+                {
+                    Success = false,
+                    Error = "Remove or reassign every Folder Fetch using this Rule Set before deleting it.",
+                    DependentFolderIds = dependentFolders
+                };
+
+            var nextRules = Clone(originalRules);
+            nextRules.RuleSets.RemoveAll(rs => string.Equals(rs.Id, r.Id, StringComparison.OrdinalIgnoreCase));
+            try
+            {
+                ruleSetStore.Save(nextRules);
+                var ensured = ruleSetStore.EnsureBuiltIns(schemaStore.Load().Schemas);
+                return new { Success = true, RuleSets = ensured.RuleSets };
+            }
+            catch
+            {
+                TryRestore(() => ruleSetStore.Save(originalRules), "Rule Sets");
+                throw;
+            }
         }
 
         public object Get(GetFolderTree r) => treeStore.Load();
@@ -724,6 +863,45 @@
 
         private static bool RuleSetsEqual(RuleSet a, RuleSet b) =>
             JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
+
+        private object CurrentConfigurationResponse()
+        {
+            var connections = connectionsStore.Load();
+            var schemas = schemaStore.EnsureBuiltIns(connections.Connections);
+            var rules = ruleSetStore.EnsureBuiltIns(schemas.Schemas);
+            return new
+            {
+                Success = true,
+                Connections = connections.Connections,
+                Schemas = schemas.Schemas,
+                RuleSets = rules.RuleSets
+            };
+        }
+
+        private static T Clone<T>(T value) =>
+            JsonSerializer.Deserialize<T>(JsonSerializer.Serialize(value));
+
+        private void RestoreConfiguration(
+            ConnectionsFile connections,
+            EndpointSchemasFile schemas,
+            RuleSetsFile rules)
+        {
+            TryRestore(() => connectionsStore.Save(connections), "Connections");
+            TryRestore(() => schemaStore.Save(schemas), "Schemas");
+            TryRestore(() => ruleSetStore.Save(rules), "Rule Sets");
+        }
+
+        private void TryRestore(Action restore, string resourceName)
+        {
+            try
+            {
+                restore();
+            }
+            catch (Exception ex)
+            {
+                logger.ErrorException("ChannelSync: Failed to roll back {0} after a deletion error", ex, resourceName);
+            }
+        }
 
         private static bool EndpointSchemasEqual(EndpointSchema a, EndpointSchema b) =>
             JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);

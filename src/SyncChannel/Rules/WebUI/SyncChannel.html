@@ -156,8 +156,9 @@
 				.rcsBoolToggle { display: inline-flex; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,0.2); }
 				.rcsBoolOption { padding: 0.3em 0.7em; font-size: 0.85em; cursor: pointer; background: rgba(0,0,0,0.15); }
 				.rcsBoolOption.rcsBoolOption-active { background: rgba(82,158,255,0.35); }
+				.rcsGroupReadOnly .rcsBoolOption, .rcsGroupReadOnly .rcsBadge { cursor: default; }
 
-				.rcsIconBtn { cursor: pointer; opacity: 0.6; font-size: 0.85em; padding: 0.2em 0.4em; }
+				.rcsIconBtn { cursor: pointer; opacity: 0.6; font-size: 0.85em; padding: 0.2em 0.4em; border: 0; color: inherit; background: transparent; font-family: inherit; }
 				.rcsIconBtn:hover { opacity: 1; }
 
 				#rcsPreviewSection { margin-top: 1.5em; padding-top: 1em; border-top: 1px solid rgba(255,255,255,0.1); }
@@ -378,16 +379,16 @@
 				</div>
 
 				<div id="connBar" style="display:flex; align-items:center; gap:0.8em; flex-wrap:wrap; margin-bottom:1em;">
-					<span class="rcsIconBtn" id="connAddBtn">+ Add Connection</span>
-					<span class="rcsIconBtn" id="connExport" title="Export all Connections as JSON text">Export</span>
-					<span class="rcsIconBtn" id="connImport" title="Import one or more Connections from JSON text">Import</span>
+					<button type="button" class="rcsIconBtn" id="connAddBtn">+ Add Connection</button>
+					<button type="button" class="rcsIconBtn" id="connExport" title="Export all Connections as JSON text">Export</button>
+					<button type="button" class="rcsIconBtn" id="connImport" title="Import one or more Connections from JSON text">Import</button>
 				</div>
 
 				<div id="connImportExportPanel" style="display:none; margin-bottom:1em;">
 					<textarea id="connImportExportText" rows="10" style="width:100%; font-family:monospace; font-size:0.85em;"></textarea>
 					<div style="margin-top:0.4em; display:flex; gap:0.5em; align-items:center;">
-						<span class="rcsIconBtn" id="connImportExportConfirm"></span>
-						<span class="rcsIconBtn" id="connImportExportCancel">Close</span>
+						<button type="button" class="rcsIconBtn" id="connImportExportConfirm"></button>
+						<button type="button" class="rcsIconBtn" id="connImportExportCancel">Close</button>
 						<span id="connImportExportStatus" class="mcsImportExportStatus"></span>
 					</div>
 				</div>
@@ -438,19 +439,19 @@
 					<select id="esConnectionSelect"></select>
 					<label for="esSchemaSelect">Schema:</label>
 					<select id="esSchemaSelect"></select>
-					<span class="rcsIconBtn" id="esNewSchema" title="Create a new, empty endpoint schema">+ New</span>
-					<span class="rcsIconBtn" id="esDuplicateSchema" title="Duplicate the currently selected schema">⧉ Duplicate</span>
-					<span class="rcsIconBtn" id="esRenameSchema" title="Rename the currently selected schema">✎ Rename</span>
-					<span class="rcsIconBtn" id="esDeleteSchema" title="Delete the currently selected schema">✕ Delete</span>
-					<span class="rcsIconBtn" id="esExportSchema" title="Copy the currently selected schema as JSON text">Export</span>
-					<span class="rcsIconBtn" id="esImportSchema" title="Paste a schema's JSON text to import it as a new schema">Import</span>
+					<button type="button" class="rcsIconBtn" id="esNewSchema" title="Create a new, empty endpoint schema">+ New</button>
+					<button type="button" class="rcsIconBtn" id="esDuplicateSchema" title="Duplicate the currently selected schema">⧉ Duplicate</button>
+					<button type="button" class="rcsIconBtn" id="esRenameSchema" title="Rename the currently selected schema">✎ Rename</button>
+					<button type="button" class="rcsIconBtn" id="esDeleteSchema" title="Delete the currently selected schema">✕ Delete</button>
+					<button type="button" class="rcsIconBtn" id="esExportSchema" title="Copy the currently selected schema as JSON text">Export</button>
+					<button type="button" class="rcsIconBtn" id="esImportSchema" title="Paste a schema's JSON text to import it as a new schema">Import</button>
 				</div>
 
 				<div id="esImportExportPanel" style="display:none; margin-bottom:1em;">
 					<textarea id="esImportExportText" rows="10" style="width:100%; font-family:monospace; font-size:0.85em;"></textarea>
 					<div style="margin-top:0.4em; display:flex; gap:0.5em; align-items:center;">
-						<span class="rcsIconBtn" id="esImportExportConfirm"></span>
-						<span class="rcsIconBtn" id="esImportExportCancel">Close</span>
+						<button type="button" class="rcsIconBtn" id="esImportExportConfirm"></button>
+						<button type="button" class="rcsIconBtn" id="esImportExportCancel">Close</button>
 						<span id="esImportExportStatus" class="mcsImportExportStatus"></span>
 					</div>
 				</div>
@@ -478,19 +479,19 @@
 					<select id="rcsSchemaSelect"></select>
 					<label for="rcsRuleSetSelect">Rule set:</label>
 					<select id="rcsRuleSetSelect"></select>
-					<span class="rcsIconBtn" id="rcsNewRuleSet" title="Create a new, empty rule set for the selected endpoint">+ New</span>
-					<span class="rcsIconBtn" id="rcsDuplicateRuleSet" title="Duplicate the currently selected rule set">⧉ Duplicate</span>
-					<span class="rcsIconBtn" id="rcsRenameRuleSet" title="Rename the currently selected rule set">✎ Rename</span>
-					<span class="rcsIconBtn" id="rcsDeleteRuleSet" title="Delete the currently selected rule set">✕ Delete</span>
-					<span class="rcsIconBtn" id="rcsExportRuleSet" title="Copy the selected Rule Set as JSON text">Export</span>
-					<span class="rcsIconBtn" id="rcsImportRuleSet" title="Import a Rule Set into the selected Schema">Import</span>
+					<button type="button" class="rcsIconBtn" id="rcsNewRuleSet" title="Create a new, empty rule set for the selected endpoint">+ New</button>
+					<button type="button" class="rcsIconBtn" id="rcsDuplicateRuleSet" title="Duplicate the currently selected rule set">⧉ Duplicate</button>
+					<button type="button" class="rcsIconBtn" id="rcsRenameRuleSet" title="Rename the currently selected rule set">✎ Rename</button>
+					<button type="button" class="rcsIconBtn" id="rcsDeleteRuleSet" title="Delete the currently selected rule set">✕ Delete</button>
+					<button type="button" class="rcsIconBtn" id="rcsExportRuleSet" title="Copy the selected Rule Set as JSON text">Export</button>
+					<button type="button" class="rcsIconBtn" id="rcsImportRuleSet" title="Import a Rule Set into the selected Schema">Import</button>
 				</div>
 
 				<div id="rcsImportExportPanel" style="display:none; margin-bottom:1em;">
 					<textarea id="rcsImportExportText" rows="10" style="width:100%; font-family:monospace; font-size:0.85em;"></textarea>
 					<div style="margin-top:0.4em; display:flex; gap:0.5em; align-items:center;">
-						<span class="rcsIconBtn" id="rcsImportExportConfirm"></span>
-						<span class="rcsIconBtn" id="rcsImportExportCancel">Close</span>
+						<button type="button" class="rcsIconBtn" id="rcsImportExportConfirm"></button>
+						<button type="button" class="rcsIconBtn" id="rcsImportExportCancel">Close</button>
 						<span id="rcsImportExportStatus" class="mcsImportExportStatus"></span>
 					</div>
 				</div>
@@ -541,8 +542,8 @@
 							<details id="rcsRawResponse" style="display:none; margin-top:0.8em;">
 								<summary>Raw response</summary>
 								<div class="esRawJsonToolbar">
-									<span class="rcsIconBtn" id="rcsCopyRawResponse">Copy to clipboard</span>
-									<span class="rcsIconBtn" id="rcsStripRawResponse">Strip to valid JSON</span>
+									<button type="button" class="rcsIconBtn" id="rcsCopyRawResponse">Copy to clipboard</button>
+									<button type="button" class="rcsIconBtn" id="rcsStripRawResponse">Strip to valid JSON</button>
 								</div>
 								<pre id="rcsRawResponseText" class="esRawJsonPre"></pre>
 							</details>

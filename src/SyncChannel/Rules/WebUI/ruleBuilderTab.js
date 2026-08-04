@@ -210,24 +210,26 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // ===================================================================
         // Badge helpers
         // ===================================================================
-        function makeNotBadge(active, onChange) {
+        function makeNotBadge(active, onChange, readOnly) {
             var badge = document.createElement('span');
             badge.className = 'rcsBadge rcsBadge-not' + (active ? ' rcsBadge-not-active' : ' rcsBadge-not-empty');
             badge.dataset.notActive = active ? 'true' : 'false';
             badge.innerText = active ? 'NOT ✕' : '¬';
-            badge.title = 'Drag NOT here to negate; click an active NOT to remove it';
+            badge.title = readOnly ? 'Read-only' : 'Drag NOT here to negate; click an active NOT to remove it';
 
-            dragEngine.registerDropTarget(badge, ['not'], function () {
-                setNotBadgeActive(badge, true);
-                if (onChange) onChange();
-            });
-
-            badge.addEventListener('click', function () {
-                if (badge.dataset.notActive === 'true') {
-                    setNotBadgeActive(badge, false);
+            if (!readOnly) {
+                dragEngine.registerDropTarget(badge, ['not'], function () {
+                    setNotBadgeActive(badge, true);
                     if (onChange) onChange();
-                }
-            });
+                });
+
+                badge.addEventListener('click', function () {
+                    if (badge.dataset.notActive === 'true') {
+                        setNotBadgeActive(badge, false);
+                        if (onChange) onChange();
+                    }
+                });
+            }
 
             return badge;
         }
@@ -239,18 +241,20 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             badge.innerText = active ? 'NOT ✕' : '¬';
         }
 
-        function makeConnectorBadge(initialValue, onChange) {
+        function makeConnectorBadge(initialValue, onChange, readOnly) {
             var badge = document.createElement('span');
             badge.className = 'rcsBadge rcsBadge-connector';
             badge.dataset.value = initialValue || 'And';
             badge.innerText = badge.dataset.value === 'Or' ? 'OR' : 'AND';
-            badge.title = 'Drag AND / OR here to change how children combine';
+            badge.title = readOnly ? 'Read-only' : 'Drag AND / OR here to change how children combine';
 
-            dragEngine.registerDropTarget(badge, ['logic'], function (value) {
-                badge.dataset.value = value;
-                badge.innerText = value === 'Or' ? 'OR' : 'AND';
-                if (onChange) onChange();
-            });
+            if (!readOnly) {
+                dragEngine.registerDropTarget(badge, ['logic'], function (value) {
+                    badge.dataset.value = value;
+                    badge.innerText = value === 'Or' ? 'OR' : 'AND';
+                    if (onChange) onChange();
+                });
+            }
 
             return badge;
         }
@@ -258,7 +262,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // ===================================================================
         // Value widget
         // ===================================================================
-        function buildValueWidget(type, initialValue, onChange) {
+        function buildValueWidget(type, initialValue, onChange, readOnly) {
             var widget = document.createElement('span');
             widget.className = 'rcsValueWidget';
             widget.dataset.value = initialValue || '';
@@ -281,8 +285,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     falseOpt.classList.toggle('rcsBoolOption-active', val === 'false');
                 }
 
-                trueOpt.addEventListener('click', function () { setActive('true'); if (onChange) onChange(); });
-                falseOpt.addEventListener('click', function () { setActive('false'); if (onChange) onChange(); });
+                if (!readOnly) {
+                    trueOpt.addEventListener('click', function () { setActive('true'); if (onChange) onChange(); });
+                    falseOpt.addEventListener('click', function () { setActive('false'); if (onChange) onChange(); });
+                }
 
                 setActive(initialValue === 'false' ? 'false' : (initialValue === 'true' ? 'true' : ''));
 
@@ -293,6 +299,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 var input = document.createElement('input');
                 input.setAttribute('is', 'emby-input');
                 input.className = 'rcsValueInput';
+                input.disabled = !!readOnly;
 
                 if (type === 'Number') {
                     input.type = 'number';
@@ -309,10 +316,12 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 // calendar date so the bare form round-trips correctly either way.
                 input.value = type === 'Date' && initialValue ? initialValue.slice(0, 10) : (initialValue || '');
 
-                input.addEventListener('input', function () {
-                    widget.dataset.value = input.value;
-                    if (onChange) onChange();
-                });
+                if (!readOnly) {
+                    input.addEventListener('input', function () {
+                        widget.dataset.value = input.value;
+                        if (onChange) onChange();
+                    });
+                }
 
                 widget.appendChild(input);
             }
@@ -323,7 +332,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // ===================================================================
         // Condition node
         // ===================================================================
-        function buildConditionNode(data, onChange, connectionId, schemaId) {
+        function buildConditionNode(data, onChange, connectionId, schemaId, readOnly) {
             data = data || {};
 
             var node = document.createElement('div');
@@ -333,7 +342,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var handle = document.createElement('span');
             handle.className = 'rcsHandle';
             handle.innerHTML = '&#9776;';
-            dragEngine.makeDraggableSource(handle, 'reorder', '', function () { return node; });
+            if (!readOnly) dragEngine.makeDraggableSource(handle, 'reorder', '', function () { return node; });
 
             var fieldSlot = document.createElement('span');
             fieldSlot.className = 'rcsSlot rcsSlot-field';
@@ -357,7 +366,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             function rebuildValueWidget(preserveValue) {
                 valueHolder.innerHTML = '';
-                var widget = buildValueWidget(currentType(), preserveValue || '', onChange);
+                var widget = buildValueWidget(currentType(), preserveValue || '', onChange, readOnly);
                 valueHolder.appendChild(widget);
             }
 
@@ -378,7 +387,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 }
             }
 
-            dragEngine.registerDropTarget(fieldSlot, ['field'], function (rawValue) {
+            if (!readOnly) dragEngine.registerDropTarget(fieldSlot, ['field'], function (rawValue) {
                 var parsed;
                 try { parsed = JSON.parse(rawValue); } catch (e) { parsed = { path: rawValue, type: 'String', display: rawValue }; }
 
@@ -395,7 +404,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 if (onChange) onChange();
             });
 
-            dragEngine.registerDropTarget(operatorSlot, ['operator'], function (value) {
+            if (!readOnly) dragEngine.registerDropTarget(operatorSlot, ['operator'], function (value) {
                 if (fieldSlot.dataset.value && !helpers.operatorAllowedForField(currentType(), value)) {
                     operatorSlot.classList.add('rcsSlotRejected');
                     setTimeout(function () { operatorSlot.classList.remove('rcsSlotRejected'); }, 500);
@@ -410,23 +419,25 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             rebuildValueWidget(data.Value);
             refreshOperatorLock();
 
-            var notBadge = makeNotBadge(!!data.Not, onChange);
+            var notBadge = makeNotBadge(!!data.Not, onChange, readOnly);
 
             var removeBtn = document.createElement('span');
             removeBtn.className = 'rcsIconBtn';
             removeBtn.innerText = '✕';
             removeBtn.title = 'Remove condition';
-            removeBtn.addEventListener('click', function () {
-                node.parentNode.removeChild(node);
-                if (onChange) onChange();
-            });
+            if (!readOnly) {
+                removeBtn.addEventListener('click', function () {
+                    node.parentNode.removeChild(node);
+                    if (onChange) onChange();
+                });
+            }
 
-            node.appendChild(handle);
+            if (!readOnly) node.appendChild(handle);
             node.appendChild(fieldSlot);
             node.appendChild(operatorSlot);
             node.appendChild(valueHolder);
             node.appendChild(notBadge);
-            node.appendChild(removeBtn);
+            if (!readOnly) node.appendChild(removeBtn);
 
             return node;
         }
@@ -434,11 +445,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // ===================================================================
         // Group node (recursive)
         // ===================================================================
-        function buildGroupNode(data, isRoot, onChange, connectionId, schemaId) {
+        function buildGroupNode(data, isRoot, onChange, connectionId, schemaId, readOnly) {
             data = data || {};
 
             var group = document.createElement('div');
-            group.className = 'rcsGroup' + (isRoot ? ' rcsGroupRoot' : '');
+            group.className = 'rcsGroup' + (isRoot ? ' rcsGroupRoot' : '') + (readOnly ? ' rcsGroupReadOnly' : '');
             group.dataset.kind = 'Group';
 
             var header = document.createElement('div');
@@ -448,8 +459,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 var handle = document.createElement('span');
                 handle.className = 'rcsHandle';
                 handle.innerHTML = '&#9776;';
-                dragEngine.makeDraggableSource(handle, 'reorder', '', function () { return group; });
-                header.appendChild(handle);
+                if (!readOnly) {
+                    dragEngine.makeDraggableSource(handle, 'reorder', '', function () { return group; });
+                    header.appendChild(handle);
+                }
             }
 
             var label = document.createElement('span');
@@ -458,13 +471,13 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             label.style.fontSize = '0.85em';
             header.appendChild(label);
 
-            var connectorBadge = makeConnectorBadge(data.LogicOperator || 'And', onChange);
+            var connectorBadge = makeConnectorBadge(data.LogicOperator || 'And', onChange, readOnly);
             header.appendChild(connectorBadge);
 
-            var notBadge = makeNotBadge(!!data.Not, onChange);
+            var notBadge = makeNotBadge(!!data.Not, onChange, readOnly);
             header.appendChild(notBadge);
 
-            if (!isRoot) {
+            if (!isRoot && !readOnly) {
                 var removeBtn = document.createElement('span');
                 removeBtn.className = 'rcsIconBtn';
                 removeBtn.innerText = '✕ Remove group';
@@ -492,9 +505,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             (data.Children || []).forEach(function (child) {
                 if (child.Kind === 'Group') {
-                    childrenContainer.appendChild(buildGroupNode(child, false, onChange, connectionId, schemaId));
+                    childrenContainer.appendChild(buildGroupNode(child, false, onChange, connectionId, schemaId, readOnly));
                 } else {
-                    childrenContainer.appendChild(buildConditionNode(child, onChange, connectionId, schemaId));
+                    childrenContainer.appendChild(buildConditionNode(child, onChange, connectionId, schemaId, readOnly));
                 }
             });
             refreshEmptyHint();
@@ -504,7 +517,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             // dragEngine has no idea what "rcsGroupChildren" means.
             var onHover = function (clientX, clientY) { dragEngine.showInsertionIndicatorAt(childrenContainer, clientY); };
 
-            dragEngine.registerDropTarget(childrenContainer, ['reorder'], function (value, reorderEl, clientY) {
+            if (!readOnly) dragEngine.registerDropTarget(childrenContainer, ['reorder'], function (value, reorderEl, clientY) {
                 if (!reorderEl) return;
                 var insertBeforeEl = dragEngine.findInsertionPoint(childrenContainer, clientY);
                 childrenContainer.insertBefore(reorderEl, insertBeforeEl);
@@ -512,16 +525,16 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 if (onChange) onChange();
             }, 'rcsDragOver', onHover);
 
-            dragEngine.registerDropTarget(childrenContainer, ['new-condition'], function (value, reorderEl, clientY) {
+            if (!readOnly) dragEngine.registerDropTarget(childrenContainer, ['new-condition'], function (value, reorderEl, clientY) {
                 var insertBeforeEl = dragEngine.findInsertionPoint(childrenContainer, clientY);
-                childrenContainer.insertBefore(buildConditionNode({}, onChange, connectionId, schemaId), insertBeforeEl);
+                childrenContainer.insertBefore(buildConditionNode({}, onChange, connectionId, schemaId, false), insertBeforeEl);
                 refreshEmptyHint();
                 if (onChange) onChange();
             }, 'rcsDragOver', onHover);
 
-            dragEngine.registerDropTarget(childrenContainer, ['new-group'], function (value, reorderEl, clientY) {
+            if (!readOnly) dragEngine.registerDropTarget(childrenContainer, ['new-group'], function (value, reorderEl, clientY) {
                 var insertBeforeEl = dragEngine.findInsertionPoint(childrenContainer, clientY);
-                childrenContainer.insertBefore(buildGroupNode({}, false, onChange, connectionId, schemaId), insertBeforeEl);
+                childrenContainer.insertBefore(buildGroupNode({}, false, onChange, connectionId, schemaId, false), insertBeforeEl);
                 refreshEmptyHint();
                 if (onChange) onChange();
             }, 'rcsDragOver', onHover);
@@ -532,7 +545,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             footer.className = 'rcsGroupFooter';
             var hint = document.createElement('span');
             hint.className = 'rcsEmptyHint';
-            hint.innerText = '(drop palette items anywhere in this box)';
+            hint.innerText = readOnly ? '(read-only built-in rule)' : '(drop palette items anywhere in this box)';
             footer.appendChild(hint);
             group.appendChild(footer);
 
@@ -649,25 +662,15 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             strip.innerText = ruleRawStrippedBySchemaId[schemaId] ? 'Show raw response' : 'Strip to valid JSON';
         }
 
-        // Marks the currently-edited rule set dirty via the store's flag
-        // (shared with ruleSetManagerTab, which owns the actual banner
-        // render) and fires 'ruleSetsDirtyStateChanged' so that tab's own
-        // subscriber updates its warning label/discard button — this tab
-        // never touches ruleSetManagerTab's DOM directly.
-        function scheduleAutoPreview(view, isUserEdit) {
-            if (isUserEdit) {
-                var currentRuleSetIndex = store.get('currentRuleSetIndex');
-                var ruleSetsFile = store.get('ruleSetsFile');
-                var edited = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
-                if (edited) store.markRuleSetEdited(edited.Id);
-            }
+        // The manager derives dirty state structurally from its working file;
+        // this event only asks it to refresh the warning and Discard button.
+        function scheduleAutoPreview(view) {
             store.emit('ruleSetsDirtyStateChanged');
             if (autoPreviewTimer) clearTimeout(autoPreviewTimer);
             autoPreviewTimer = setTimeout(function () { runAutoPreview(view); }, 450);
         }
 
         function markRuleSetsDirty(view) {
-            store.set('ruleSetsHaveUnsavedChanges', true);
             store.emit('ruleSetsDirtyStateChanged');
         }
 
@@ -743,10 +746,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             }
 
             var connectionId = view.querySelector('#rcsConnectionSelect').value;
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var previewRuleSetId = currentRuleSetIndex >= 0 && ruleSetsFile.RuleSets[currentRuleSetIndex]
-                ? ruleSetsFile.RuleSets[currentRuleSetIndex].Id : '';
+            var previewRuleSetId = store.get('currentRuleSetId');
             var previewToken = ++autoPreviewToken;
 
             statusEl.innerText = 'Checking…' + warningText;
@@ -762,9 +762,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 contentType: 'application/json',
                 dataType: 'json'
             }).then(function (result) {
-                var latestIndex = store.get('currentRuleSetIndex');
-                var latestFile = store.get('ruleSetsFile');
-                var activeRuleSet = latestIndex >= 0 ? latestFile.RuleSets[latestIndex] : null;
+                var activeRuleSet = store.ruleSetById(store.get('currentRuleSetId'));
                 if (previewToken !== autoPreviewToken ||
                     view.querySelector('#rcsConnectionSelect').value !== connectionId ||
                     view.querySelector('#rcsSchemaSelect').value !== schemaId ||

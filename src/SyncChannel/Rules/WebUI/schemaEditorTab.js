@@ -1,11 +1,10 @@
 define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
+        'configurationpage?name=SyncChannelEditorSessionJs',
         'configurationpage?name=SyncChannelDragEngineJs',
         'configurationpage?name=SyncChannelFieldDiscoveryJs',
         'configurationpage?name=SyncChannelSharedHelpersJs',
-        'configurationpage?name=SyncChannelRuleBuilderTabJs',
-        'configurationpage?name=SyncChannelConnectionsTabJs',
-        'configurationpage?name=SyncChannelRuleSetManagerTabJs'],
-    function ($, store, dragEngine, fieldDiscovery, helpers, ruleBuilderTab, connectionsTab, ruleSetManagerTab) {
+        'configurationpage?name=SyncChannelRuleBuilderTabJs'],
+    function ($, store, editorSession, dragEngine, fieldDiscovery, helpers, ruleBuilderTab) {
         'use strict';
 
         // field.Examples is per-record (Examples[i] = record i's own
@@ -172,6 +171,12 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             };
         }
 
+        function blockSchemaEntityNavigation() {
+            return !editorSession.allowNavigation('schema', null, function (blocked) {
+                alert(editorSession.blockedMessage(blocked));
+            });
+        }
+
         function renderSchemaSelect(view) {
             var select = view.querySelector('#esSchemaSelect');
             var connectionSelect = view.querySelector('#esConnectionSelect');
@@ -193,8 +198,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             select.value = currentSchemaId;
 
             select.onchange = function () {
-                if (schemasHaveUnsavedChanges) {
-                    alert('Save or discard your schema changes before switching schemas.');
+                if (!editorSession.allowNavigation('schema', null, function (blocked) {
+                    alert(editorSession.blockedMessage(blocked));
+                })) {
                     select.value = store.get('currentSchemaId');
                     return;
                 }
@@ -221,8 +227,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             if (!select.dataset.wired) {
                 select.dataset.wired = '1';
                 select.addEventListener('change', function () {
-                    if (schemasHaveUnsavedChanges) {
-                        alert('Save or discard your schema changes before switching connections.');
+                    if (!editorSession.allowNavigation('connection', null, function (blocked) {
+                        alert(editorSession.blockedMessage(blocked));
+                    })) {
                         var currentSchema = store.currentSchema();
                         select.value = currentSchema ? currentSchema.ConnectionId : lastConnectionSelectValue;
                         return;
@@ -445,19 +452,16 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             return mn ? { Start: parseInt(mn[1], 10), End: -1 } : null;
         }
 
-        // ArraySlice is only meaningful wrapping a single list-typed field —
-        // Left/Right/Substring always resolve against a string and are
-        // always valid. CachedType is stamped onto Field nodes whenever
-        // they're rendered (see renderNode) so this can be checked without
-        // re-running field discovery; if a Field node hasn't been rendered
-        // yet this session its CachedType is undefined, in which case this
-        // fails open (assumes valid) rather than blocking on missing info.
-        function functionNodeValidity(node) {
+        // ArraySlice is only meaningful wrapping a single list-typed field.
+        // Field types live in the discovery cache, never on persisted mapping
+        // nodes; rendering configuration must be a read-only operation.
+        function functionNodeValidity(node, fieldByPath) {
             if (node.Kind !== 'Function') return true;
             if (node.Function !== 'ArraySlice') return true;
             if (node.Children.length !== 1 || node.Children[0].Kind !== 'Field') return false;
             if (node.ArrayMatchField && !node.ArrayMatchValue) return false;
-            var type = node.Children[0].CachedType;
+            var field = fieldByPath && fieldByPath[node.Children[0].Value];
+            var type = field && field.Type;
             return type === undefined || type === 'List';
         }
 
@@ -806,7 +810,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     chip.appendChild(textSpan);
                     if (node.Kind === 'Field') {
                         var field = fbp[node.Value];
-                        node.CachedType = field ? field.Type : node.CachedType;
                         chip.addEventListener('mouseenter', function () {
                             updateHoverPreview(chip, nodeResolvedExamples(node), warnRoleKey || labelText);
                         });
@@ -841,7 +844,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             function renderFunctionNode(node, parentArray, idx, fbp, connection) {
                 var wrap = document.createElement('span');
-                var valid = functionNodeValidity(node);
+                var valid = functionNodeValidity(node, fbp);
                 wrap.className = 'rcsChip esMapSeg esMapSeg-function ' + (valid ? 'rcsChip-modifier' : 'rcsChip-modifier-invalid');
                 wrap.dataset.mapNodeValid = valid ? '1' : '0';
 
@@ -1269,20 +1272,19 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             container.innerHTML = '';
 
             if (!store.currentSchema()) {
-                container.innerHTML = '<div class="fieldDescription">No schema selected -- use + New to create one.</div>';
                 refreshSchemaDirtyState(view);
                 return;
             }
 
             var schema = store.currentSchema();
             var isBuiltInTemplate = !!schema.IsBuiltIn;
-            var locked = false;
+            var locked = isBuiltInTemplate;
 
             if (isBuiltInTemplate) {
                 var lockNotice = document.createElement('div');
                 lockNotice.className = 'fieldDescription';
                 lockNotice.style.marginBottom = '0.8em';
-                lockNotice.innerText = 'This is a protected built-in template. You can test, inspect and edit it here; Save will ask for a new Schema name and preserve the built-in unchanged.';
+                lockNotice.innerText = 'This is a read-only built-in template. Use Duplicate to create an editable custom Schema.';
                 container.appendChild(lockNotice);
             }
 
@@ -1874,8 +1876,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             suggestBtn.type = 'button';
             suggestBtn.className = 'raised button-submit';
             suggestBtn.innerText = schemaDiscoveryBusyBySchemaId[schema.Id] ? 'Testing…' : 'Test and Suggest Field Mappings';
-            suggestBtn.disabled = !schema.Path || !!schemaDiscoveryBusyBySchemaId[schema.Id];
-            suggestBtn.title = schema.Path ? 'Test this draft against its owning connection.' : 'Enter an Endpoint path first.';
+            suggestBtn.disabled = !!schema.IsBuiltIn || !schema.Path || !!schemaDiscoveryBusyBySchemaId[schema.Id];
+            suggestBtn.title = schema.IsBuiltIn
+                ? 'Duplicate this built-in Schema before testing or applying suggestions.'
+                : (schema.Path ? 'Test this draft against its owning connection.' : 'Enter an Endpoint path first.');
             suggestBtn.addEventListener('click', function () {
                 if (!schema.Path) { Dashboard.alert('Enter an Endpoint path first.'); return; }
                 if (!store.findConnection(schema.ConnectionId)) { Dashboard.alert('The owning connection no longer exists.'); return; }
@@ -1900,6 +1904,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function newSchema(view) {
+            if (blockSchemaEntityNavigation()) return;
             var connectionId = view.querySelector('#esConnectionSelect').value;
             if (!connectionId) { Dashboard.alert('Add and save a Connection first.'); return; }
             var persistedConnectionIds = store.get('persistedConnectionIds');
@@ -1920,41 +1925,24 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function duplicateSchema(view) {
+            if (blockSchemaEntityNavigation()) return;
             var source = store.currentSchema();
             if (!source) { Dashboard.alert('No schema selected to duplicate.'); return; }
             var name = prompt('Name for the duplicated schema:', (source.DisplayName || 'Schema') + ' copy');
             if (!name || !name.trim()) return;
-
-            var connections = store.get('connections');
-            var ownerIndex = connections.findIndex(function (c) { return c.Id === source.ConnectionId; });
-            var choices = connections.map(function (c, i) { return (i + 1) + '. ' + c.DisplayLabel; }).join('\n');
-            var targetAnswer = prompt('Target Connection (enter its number):\n' + choices, String(ownerIndex + 1));
-            var targetIndex = parseInt(targetAnswer, 10) - 1;
-            if (!connections[targetIndex]) { Dashboard.alert('No valid target Connection selected.'); return; }
-            if (store.schemaNameExists(connections[targetIndex].Id, name)) { Dashboard.alert('Schema names must be unique within the target Connection.'); return; }
+            if (store.schemaNameExists(source.ConnectionId, name)) {
+                Dashboard.alert('Schema names must be unique within a Connection.');
+                return;
+            }
 
             var clone = JSON.parse(JSON.stringify(source));
             clone.Id = helpers.newId();
             clone.DisplayName = name.trim();
-            clone.ConnectionId = connections[targetIndex].Id;
+            clone.ConnectionId = source.ConnectionId;
             clone.IsBuiltIn = false;
             var schemas = store.get('schemas');
             schemas.push(clone);
             markSchemasDirty(view);
-            var ruleSetsFile = store.get('ruleSetsFile');
-            if (confirm('Copy this schema\'s Rule Sets too?')) {
-                ruleSetsFile.RuleSets
-                    .filter(function (rs) { return rs.EndpointSchemaId === source.Id; })
-                    .forEach(function (rs) {
-                        var copy = JSON.parse(JSON.stringify(rs));
-                        copy.Id = helpers.newId();
-                        copy.EndpointSchemaId = clone.Id;
-                        copy.IsBuiltIn = false;
-                        ruleSetsFile.RuleSets.push(copy);
-                    });
-                store.set('schemaOperationChangedRuleSets', true);
-                ruleBuilderTab.markRuleSetsDirty(view);
-            }
             view.querySelector('#esConnectionSelect').value = clone.ConnectionId;
             store.set('currentSchemaId', clone.Id);
             renderSchemaSelect(view);
@@ -1978,23 +1966,79 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             if (!schema) return;
             if (schema.IsBuiltIn) { Dashboard.alert('Built-in endpoint schemas are read-only and cannot be deleted.'); return; }
 
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var usedRuleIds = ruleSetsFile.RuleSets
+            var sameConnection = store.schemasForConnection(schema.ConnectionId);
+            var deletedIndex = sameConnection.findIndex(function (item) { return item.Id === schema.Id; });
+            var usedRuleIds = store.get('ruleSetsFile').RuleSets
                 .filter(function (rs) { return rs.EndpointSchemaId === schema.Id; })
                 .map(function (rs) { return rs.Id; });
             var currentTree = store.get('currentTree');
-            if (store.folderTreeUsesAnyRuleSet(currentTree && currentTree.RootFolder, usedRuleIds)) {
-                Dashboard.alert('This schema cannot be deleted because a Folder Fetch uses one of its Rule Sets.');
+            var references = store.folderTreeReferencesForRuleSets(
+                currentTree && currentTree.RootFolder, usedRuleIds);
+            if (references.length) {
+                Dashboard.alert(helpers.folderFetchDependencyMessage(
+                    'schema', schema.DisplayName, references));
                 return;
             }
-            if (!confirm('Delete schema "' + schema.DisplayName + '" and its Rule Sets?')) return;
-            var schemas = store.get('schemas').filter(function (s) { return s.Id !== schema.Id; });
-            ruleSetsFile.RuleSets = ruleSetsFile.RuleSets.filter(function (rs) { return rs.EndpointSchemaId !== schema.Id; });
-            store.set('schemas', schemas);
-            store.set('currentSchemaId', '');
-            markSchemasDirty(view);
-            renderSchemaSelect(view);
-            renderSchemaForm(view);
+
+            var savedSchemas = schemasSavedSnapshot === null ? [] : JSON.parse(schemasSavedSnapshot);
+            var persisted = savedSchemas.some(function (item) { return item.Id === schema.Id; });
+            if (!persisted) {
+                var localSchemas = store.get('schemas').filter(function (item) { return item.Id !== schema.Id; });
+                var localRemaining = localSchemas.filter(function (item) { return item.ConnectionId === schema.ConnectionId; });
+                store.set('schemas', localSchemas);
+                store.set('currentSchemaId', editorSession.selectionAfterDeletion(
+                    localRemaining, deletedIndex, function (item) { return item.Id; }));
+                renderSchemaSelect(view);
+                renderSchemaForm(view);
+                refreshSchemaDirtyState(view);
+                return;
+            }
+            if (schemasAreDirty()) {
+                Dashboard.alert('Save or discard your Schema changes before deleting a saved Schema.');
+                return;
+            }
+            if (!confirm('Delete schema "' + schema.DisplayName + '" and its ' + usedRuleIds.length + ' Rule Set(s)?')) return;
+
+            var status = view.querySelector('#esSaveStatus');
+            status.innerText = 'Deleting\u2026';
+            savingSchemas = true;
+            editorSession.setBusy(view, 'schemas', true);
+            ApiClient.ajax({
+                type: 'DELETE',
+                url: ApiClient.getUrl('ChannelSync/EndpointSchemas/' + encodeURIComponent(schema.Id)),
+                dataType: 'json'
+            }).then(function (result) {
+                if (!result || result.Success !== true) {
+                    savingSchemas = false;
+                    editorSession.setBusy(view, 'schemas', false);
+                    status.innerText = 'Deletion blocked -- nothing was removed.';
+                    Dashboard.alert((result && result.Error) || 'The Schema could not be deleted.');
+                    return;
+                }
+                var newSchemas = (result && result.Schemas) || [];
+                var newRuleSets = (result && result.RuleSets) || [];
+                var remaining = newSchemas.filter(function (item) { return item.ConnectionId === schema.ConnectionId; });
+                var nextSchemaId = editorSession.selectionAfterDeletion(
+                    remaining, deletedIndex, function (item) { return item.Id; });
+
+                store.set('schemas', newSchemas);
+                store.set('currentSchemaId', nextSchemaId);
+                store.set('ruleSetsFile', { RuleSets: newRuleSets });
+                if (!newRuleSets.some(function (ruleSet) { return ruleSet.Id === store.get('currentRuleSetId'); })) {
+                    store.set('currentRuleSetId', '');
+                }
+                store.emit('schemasChanged');
+                store.emit('ruleSetsChanged');
+                snapshotSchemasSaved();
+                refreshSchemaDirtyState(view);
+                status.innerText = 'Deleted.';
+                savingSchemas = false;
+                editorSession.setBusy(view, 'schemas', false);
+            }).catch(function () {
+                savingSchemas = false;
+                editorSession.setBusy(view, 'schemas', false);
+                status.innerText = 'Delete failed -- nothing was removed. See server log.';
+            });
         }
 
         function exportSchema(view) {
@@ -2025,6 +2069,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function importSchema(view) {
+            if (blockSchemaEntityNavigation()) return;
             var panel = view.querySelector('#esImportExportPanel');
             var text = view.querySelector('#esImportExportText');
             var status = view.querySelector('#esImportExportStatus');
@@ -2071,37 +2116,23 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         var schemasSavedSnapshot = null;
-        var schemaRuleSetsSavedSnapshot = null;
-        var builtInSchemaOriginals = {};
-        var builtInSchemaComparisonSnapshots = {};
-        var schemasHaveUnsavedChanges = false;
+        var schemasSavedComparison = null;
+        var savingSchemas = false;
         var activeView = null;
 
-        // Mapping nodes acquire CachedType while they are rendered so the UI
-        // can validate Array functions against the discovery palette. It is
-        // session-only metadata, is not part of EndpointSchema on the server,
-        // and deliberately does not mark the editor dirty. Exclude it from
-        // built-in edit detection; otherwise merely inspecting a built-in can
-        // make Save treat it as modified while the visible dirty state remains
-        // clean. Keep this as a recursive serializer so CachedType is ignored
-        // at any depth in nested Function children.
-        function schemaForEditComparison(schema) {
-            return JSON.stringify(schema, function (key, value) {
-                return key === 'CachedType' ? undefined : value;
-            });
+        function schemasForComparison(schemas) {
+            return editorSession.canonicalJson(schemas || [], { CachedType: true, IsFavorite: true });
+        }
+
+        function schemasAreDirty() {
+            return schemasSavedComparison !== null &&
+                schemasForComparison(store.get('schemas')) !== schemasSavedComparison;
         }
 
         function snapshotSchemasSaved() {
             var schemas = store.get('schemas');
             schemasSavedSnapshot = JSON.stringify(schemas);
-            schemaRuleSetsSavedSnapshot = JSON.stringify(store.get('ruleSetsFile'));
-            schemasHaveUnsavedChanges = false;
-            builtInSchemaOriginals = {};
-            builtInSchemaComparisonSnapshots = {};
-            schemas.filter(function (schema) { return schema.IsBuiltIn; }).forEach(function (schema) {
-                builtInSchemaOriginals[schema.Id] = JSON.stringify(schema);
-                builtInSchemaComparisonSnapshots[schema.Id] = schemaForEditComparison(schema);
-            });
+            schemasSavedComparison = schemasForComparison(schemas);
         }
 
         function refreshSchemaDirtyState(view) {
@@ -2109,29 +2140,19 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var warn = view.querySelector('#esDirtyWarning');
             var discard = view.querySelector('#esDiscardBtn');
             if (!warn) return;
-            var dirty = schemasSavedSnapshot !== null &&
-                (schemasHaveUnsavedChanges || store.get('schemaOperationChangedRuleSets'));
+            var dirty = schemasAreDirty();
             warn.innerText = dirty ? 'Unsaved changes' : '';
             if (discard) discard.disabled = !dirty;
         }
 
         function markSchemasDirty(view) {
-            schemasHaveUnsavedChanges = true;
             refreshSchemaDirtyState(view);
         }
 
         function discardEndpointSchemaChanges(view) {
             if (schemasSavedSnapshot === null) return;
-            var schemaOperationChangedRuleSets = store.get('schemaOperationChangedRuleSets');
-            if (schemaOperationChangedRuleSets &&
-                !confirm('Discard Schema changes and the Rule Set copies/deletions made by those Schema operations?')) return;
-
             var selectedConnectionId = view.querySelector('#esConnectionSelect').value;
             var selectedSchemaId = store.get('currentSchemaId');
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var selectedRule = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
-            var selectedRuleId = selectedRule ? selectedRule.Id : '';
             var restoredSchemas = JSON.parse(schemasSavedSnapshot);
             var restoredSelectedSchema = restoredSchemas.filter(function (schema) {
                 return schema.Id === selectedSchemaId;
@@ -2152,11 +2173,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var restoredSchemaId = restoredSelectedSchema && restoredSelectedSchema.ConnectionId === restoredConnectionId
                 ? restoredSelectedSchema.Id
                 : '';
-            if (schemaOperationChangedRuleSets && schemaRuleSetsSavedSnapshot) {
-                store.set('ruleSetsFile', JSON.parse(schemaRuleSetsSavedSnapshot), 'ruleSetsChanged');
-            }
-            store.set('schemaOperationChangedRuleSets', false);
-            schemasHaveUnsavedChanges = false;
             // Publish a consistent collection/selection state. Emitting
             // schemasChanged between replacing the collection and restoring
             // currentSchemaId exposes an invalid intermediate state to every
@@ -2166,70 +2182,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderSchemaConnectionSelect(view, restoredConnectionId);
             renderSchemaForm(view);
             store.emit('schemasChanged');
-            var restoredRuleIndex = store.get('ruleSetsFile').RuleSets.findIndex(function (ruleSet) {
-                return ruleSet.Id === selectedRuleId;
-            });
-            store.set('currentRuleSetIndex', restoredRuleIndex);
-            ruleSetManagerTab.renderRuleSetSelect(view);
-            ruleSetManagerTab.renderCanvasForCurrentIndex(view);
             view.querySelector('#esSaveStatus').innerText = '';
             snapshotSchemasSaved();
             refreshSchemaDirtyState(view);
-        }
-
-        function copySchemaRuntimeState(source, clone) {
-            var sourceFields = fieldDiscovery.getDiscoveredFields(source.ConnectionId, source.Id);
-            if (sourceFields) {
-                fieldDiscovery.setDiscoveredFields(clone.ConnectionId, clone.Id, JSON.parse(JSON.stringify(sourceFields)));
-                lastDiscoveryConnBySchemaId[clone.Id] = clone.ConnectionId;
-            }
-            if (lastRawJsonBySchemaId[source.Id]) lastRawJsonBySchemaId[clone.Id] = lastRawJsonBySchemaId[source.Id];
-            if (rawJsonExpandedBySchemaId[source.Id]) rawJsonExpandedBySchemaId[clone.Id] = true;
-            if (rawJsonStrippedBySchemaId[source.Id]) rawJsonStrippedBySchemaId[clone.Id] = true;
-            if (schemaTestStatusBySchemaId[source.Id]) schemaTestStatusBySchemaId[clone.Id] = schemaTestStatusBySchemaId[source.Id];
-        }
-
-        function saveEditedBuiltInsAsCopies() {
-            var schemas = store.get('schemas');
-            var edits = schemas.filter(function (schema) {
-                return schema.IsBuiltIn && builtInSchemaComparisonSnapshots[schema.Id] &&
-                    schemaForEditComparison(schema) !== builtInSchemaComparisonSnapshots[schema.Id];
-            });
-            if (!edits.length) return true;
-
-            var requestedNames = [];
-            for (var i = 0; i < edits.length; i++) {
-                var source = edits[i];
-                var name = prompt(
-                    'The built-in Schema "' + source.DisplayName + '" cannot be overwritten.\nName the new Schema for these edits:',
-                    source.DisplayName + ' custom');
-                if (!name || !name.trim()) return false;
-                name = name.trim();
-                if (store.schemaNameExists(source.ConnectionId, name) ||
-                    requestedNames.some(function (entry) {
-                        return entry.connectionId === source.ConnectionId &&
-                            entry.name.toLowerCase() === name.toLowerCase();
-                    })) {
-                    Dashboard.alert('Schema names must be unique within a Connection.');
-                    return false;
-                }
-                requestedNames.push({ source: source, connectionId: source.ConnectionId, name: name });
-            }
-
-            requestedNames.forEach(function (entry) {
-                var source = entry.source;
-                var clone = JSON.parse(JSON.stringify(source));
-                clone.Id = helpers.newId();
-                clone.DisplayName = entry.name;
-                clone.IsBuiltIn = false;
-
-                var sourceIndex = schemas.findIndex(function (schema) { return schema.Id === source.Id; });
-                schemas[sourceIndex] = JSON.parse(builtInSchemaOriginals[source.Id]);
-                schemas.push(clone);
-                copySchemaRuntimeState(source, clone);
-                if (store.get('currentSchemaId') === source.Id) store.set('currentSchemaId', clone.Id);
-            });
-            return true;
         }
 
         // Generic walk that finds every MappingNode across every schema by
@@ -2238,40 +2193,40 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // added/renamed on EndpointSchema later without needing a matching
         // update here. Returns every invalid Function node found (currently
         // only an invalid ArraySlice shape or match — see
-        // functionNodeValidity). CachedType is only populated
-        // for Field nodes that have actually been rendered this session
-        // (see renderNode), so a schema whose mapping tab was never opened
-        // this session won't have it and fails open (assumed valid) rather
-        // than blocking on information this client doesn't have.
+        // functionNodeValidity). Field types come from the runtime discovery
+        // cache and never get written onto persisted mapping nodes.
         function collectInvalidFunctionNodes(schemas) {
             var invalid = [];
-            function walkNodes(nodes) {
+            function walkNodes(nodes, fieldByPath) {
                 (nodes || []).forEach(function (node) {
                     if (node && node.Kind === 'Function') {
-                        if (!functionNodeValidity(node)) invalid.push(node);
-                        walkNodes(node.Children);
+                        if (!functionNodeValidity(node, fieldByPath)) invalid.push(node);
+                        walkNodes(node.Children, fieldByPath);
                     }
                 });
             }
-            function walkValue(v) {
+            function walkValue(v, fieldByPath) {
                 if (!v || typeof v !== 'object') return;
-                if (Array.isArray(v)) { v.forEach(walkValue); return; }
-                if (Array.isArray(v.Segments)) { walkNodes(v.Segments); return; }
-                Object.keys(v).forEach(function (k) { walkValue(v[k]); });
+                if (Array.isArray(v)) { v.forEach(function (item) { walkValue(item, fieldByPath); }); return; }
+                if (Array.isArray(v.Segments)) { walkNodes(v.Segments, fieldByPath); return; }
+                Object.keys(v).forEach(function (k) { walkValue(v[k], fieldByPath); });
             }
-            (schemas || []).forEach(walkValue);
+            (schemas || []).forEach(function (schema) {
+                var fields = fieldDiscovery.getDiscoveredFields(schema.ConnectionId, schema.Id) || [];
+                var fieldByPath = {};
+                fields.forEach(function (field) { fieldByPath[field.JsonPath] = field; });
+                walkValue(schema, fieldByPath);
+            });
             return invalid;
         }
 
         function saveEndpointSchemas(view) {
+            if (savingSchemas) return;
             var status = view.querySelector('#esSaveStatus');
             var affectedFolders = 0;
-            if (!saveEditedBuiltInsAsCopies()) {
-                status.innerText = 'Save cancelled.';
-                return;
-            }
 
-            var invalidFunctionNodes = collectInvalidFunctionNodes(store.get('schemas'));
+            var currentSchema = store.currentSchema();
+            var invalidFunctionNodes = collectInvalidFunctionNodes(currentSchema ? [currentSchema] : []);
             if (invalidFunctionNodes.length > 0) {
                 var invalidChip = view.querySelector('.esMapSeg-function[data-map-node-valid="0"]');
                 if (invalidChip) invalidChip.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2285,11 +2240,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             var selectedConnectionId = view.querySelector('#esConnectionSelect').value;
             var selectedSchemaId = store.get('currentSchemaId');
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var selectedRule = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
-            var selectedRuleId = selectedRule ? selectedRule.Id : '';
             status.innerText = 'Saving...';
+            savingSchemas = true;
+            editorSession.setBusy(view, 'schemas', true);
 
             ApiClient.ajax({
                 type: 'POST',
@@ -2299,17 +2252,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 dataType: 'json'
             }).then(function (result) {
                 affectedFolders += (result && result.AffectedFolderCount) || 0;
-                var schemaOperationChangedRuleSets = store.get('schemaOperationChangedRuleSets');
-                if (!schemaOperationChangedRuleSets) return Promise.resolve();
-                return ApiClient.ajax({
-                    type: 'POST',
-                    url: ApiClient.getUrl('ChannelSync/RuleSets'),
-                    data: JSON.stringify({ Payload: store.get('ruleSetsFile') }),
-                    contentType: 'application/json',
-                    dataType: 'json'
-                }).then(function (result) {
-                    affectedFolders += (result && result.AffectedFolderCount) || 0;
-                });
             }).then(function () {
                 status.innerText = affectedFolders > 0 ? 'Saved. Folder tree resync started.' : 'Saved.';
                 return Promise.all([
@@ -2318,38 +2260,22 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 ]).then(function (results) {
                     var newSchemas = (results[0] && results[0].Schemas) || [];
                     var serverRuleSets = (results[1] && results[1].RuleSets) || [];
-                    var liveSchemaIds = {};
-                    newSchemas.forEach(function (s) { liveSchemaIds[s.Id] = true; });
-                    var currentRuleSetsFile = store.get('ruleSetsFile');
-                    var localCustomRules = currentRuleSetsFile.RuleSets.filter(function (rs) {
-                        return !rs.IsBuiltIn && liveSchemaIds[rs.EndpointSchemaId];
-                    });
-                    var newRuleSetsFile = {
-                        RuleSets: localCustomRules.concat(serverRuleSets.filter(function (rs) { return rs.IsBuiltIn; }))
-                    };
+                    var newRuleSetsFile = { RuleSets: serverRuleSets };
                     store.set('schemas', newSchemas, 'schemasChanged');
                     store.set('ruleSetsFile', newRuleSetsFile, 'ruleSetsChanged');
-                    connectionsTab.renderSystemTypeDatalist(view);
                     renderSchemaConnectionSelect(view);
                     view.querySelector('#esConnectionSelect').value = selectedConnectionId;
                     store.set('currentSchemaId', selectedSchemaId);
                     renderSchemaSelect(view);
                     renderSchemaForm(view);
-                    ruleSetManagerTab.renderConnectionAndSchemaSelects(view);
-                    var restoredRuleIndex = newRuleSetsFile.RuleSets.findIndex(function (rs) { return rs.Id === selectedRuleId; });
-                    var availableRules = store.ruleSetsForSchema(selectedSchemaId);
-                    store.set('currentRuleSetIndex', restoredRuleIndex >= 0 ? restoredRuleIndex : (availableRules.length ? availableRules[0].idx : -1));
-                    ruleSetManagerTab.renderRuleSetSelect(view);
-                    ruleSetManagerTab.renderCanvasForCurrentIndex(view);
                     snapshotSchemasSaved();
-                    if (store.get('schemaOperationChangedRuleSets')) {
-                        store.set('ruleSetsSavedSnapshot', JSON.stringify(store.get('ruleSetsFile')));
-                        store.clearRuleSetEditFlags();
-                    }
-                    store.set('schemaOperationChangedRuleSets', false);
                     refreshSchemaDirtyState(view);
+                    savingSchemas = false;
+                    editorSession.setBusy(view, 'schemas', false);
                 });
             }).catch(function () {
+                savingSchemas = false;
+                editorSession.setBusy(view, 'schemas', false);
                 status.innerText = 'Save failed -- see server log.';
             });
         }
@@ -2376,26 +2302,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderSchemaForm(view);
             snapshotSchemasSaved();
 
-            // Connections are saved independently from this tab. That save
-            // reloads the server's built-in schemas and replaces the shared
-            // schema collection (while preserving local custom schemas). The
-            // replacement is authoritative saved state, so an idle schema
-            // editor must adopt it as its new comparison baseline. Otherwise
-            // saveEditedBuiltInsAsCopies compares the freshly reloaded object
-            // with the pre-connection-save snapshot and can report an
-            // untouched built-in (for example Radarr's Movies schema) as an
-            // edit while saving a new custom schema on another connection.
-            //
-            // Never re-baseline over real schema-side work. Schema operations
-            // which also copy/delete Rule Sets use the second flag and need
-            // the original schema and Rule Set snapshots for Discard.
             store.on('schemasChanged', function () {
                 renderSchemaConnectionSelect(view);
                 renderSchemaForm(view);
-                if (!schemasHaveUnsavedChanges && !store.get('schemaOperationChangedRuleSets')) {
-                    snapshotSchemasSaved();
-                    refreshSchemaDirtyState(view);
-                }
+                snapshotSchemasSaved();
+                refreshSchemaDirtyState(view);
             });
 
             store.on('connectionsChanged', function () {
@@ -2408,8 +2319,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             init: init,
             newSchema: newSchema,
             renderSchemaForm: renderSchemaForm,
-            hasUnsavedChanges: function () {
-                return schemasHaveUnsavedChanges || !!store.get('schemaOperationChangedRuleSets');
-            }
+            hasUnsavedChanges: schemasAreDirty,
+            isSaving: function () { return savingSchemas; }
         };
     });

@@ -79,6 +79,11 @@ namespace SyncChannel
                 },
                 new PluginPageInfo
                 {
+                    Name = "SyncChannelEditorSessionJs",
+                    EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.editorSession.js"
+                },
+                new PluginPageInfo
+                {
                     Name = "SyncChannelFieldDiscoveryJs",
                     EmbeddedResourcePath = GetType().Namespace + ".Rules.WebUI.fieldDiscovery.js"
                 },

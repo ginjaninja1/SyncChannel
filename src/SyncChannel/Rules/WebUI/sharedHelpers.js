@@ -72,12 +72,32 @@ define([], function () {
         return glyph + ' ' + (c.LastTestSucceeded ? 'reachable' : 'unreachable') + ' (' + when.toLocaleString() + ')';
     }
 
+    function folderFetchDependencyMessage(entityType, entityName, references) {
+        var locations = (references || []).map(function (reference) {
+            return '\u2022 ' + reference.Path + ' \u2014 ' + reference.FetchName;
+        });
+        return 'Cannot delete ' + entityType + ' "' + entityName + '". Remove or reassign these Folder Fetches first:' +
+            (locations.length ? '\n\n' + locations.join('\n') : '');
+    }
+
+    function connectionDeletionMessage(connectionName, ownedSchemas, ownedRuleSets) {
+        var customSchemaCount = (ownedSchemas || []).filter(function (schema) { return !schema.IsBuiltIn; }).length;
+        var customRuleSetCount = (ownedRuleSets || []).filter(function (ruleSet) { return !ruleSet.IsBuiltIn; }).length;
+        var message = 'Delete connection "' + connectionName + '"?';
+        if (!customSchemaCount && !customRuleSetCount) return message;
+        return message + '\n\nThis will also delete ' + customSchemaCount + ' custom ' +
+            (customSchemaCount === 1 ? 'Schema' : 'Schemas') + ' and ' + customRuleSetCount + ' custom ' +
+            (customRuleSetCount === 1 ? 'Rule Set' : 'Rule Sets') + '.';
+    }
+
     return {
         ALL_OPERATORS: ALL_OPERATORS,
         operatorAllowedForField: operatorAllowedForField,
         newId: newId,
         copyTextToClipboard: copyTextToClipboard,
         connectionBadgeGlyph: connectionBadgeGlyph,
-        connectionBadgeText: connectionBadgeText
+        connectionBadgeText: connectionBadgeText,
+        folderFetchDependencyMessage: folderFetchDependencyMessage,
+        connectionDeletionMessage: connectionDeletionMessage
     };
 });

@@ -1,8 +1,9 @@
 define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
+        'configurationpage?name=SyncChannelEditorSessionJs',
         'configurationpage?name=SyncChannelDragEngineJs',
         'configurationpage?name=SyncChannelSharedHelpersJs',
         'configurationpage?name=SyncChannelRuleBuilderTabJs'],
-    function ($, store, dragEngine, helpers, ruleBuilderTab) {
+    function ($, store, editorSession, dragEngine, helpers, ruleBuilderTab) {
         'use strict';
 
         function emptyRoot() {
@@ -16,6 +17,47 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         var lastRuleSetConnectionId = '';
         var lastRuleSetSchemaId = '';
+        var savingRuleSets = false;
+        var ruleSetsRestoreSnapshot = null;
+
+        function canonicalRuleNode(node) {
+            node = node || {};
+            if (node.Kind === 'Condition') {
+                return {
+                    Kind: 'Condition',
+                    Not: !!node.Not,
+                    Field: node.Field || '',
+                    Operator: node.Operator || '',
+                    Value: node.Value || ''
+                };
+            }
+            return {
+                Kind: 'Group',
+                Not: !!node.Not,
+                LogicOperator: node.LogicOperator || 'And',
+                Children: (node.Children || []).map(canonicalRuleNode)
+            };
+        }
+
+        function ruleSetsForComparison(file) {
+            return editorSession.canonicalJson({
+                RuleSets: ((file && file.RuleSets) || []).map(function (ruleSet) {
+                    return {
+                        Id: ruleSet.Id,
+                        Name: ruleSet.Name,
+                        EndpointSchemaId: ruleSet.EndpointSchemaId,
+                        IsBuiltIn: !!ruleSet.IsBuiltIn,
+                        Root: canonicalRuleNode(ruleSet.Root)
+                    };
+                })
+            });
+        }
+
+        function ruleSetsAreDirty() {
+            var saved = store.get('ruleSetsSavedSnapshot');
+            return saved !== null &&
+                ruleSetsForComparison(store.get('ruleSetsFile')) !== saved;
+        }
 
         function rememberRuleSetNavigation(view) {
             lastRuleSetConnectionId = view.querySelector('#rcsConnectionSelect').value;
@@ -25,11 +67,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         function restoreRuleSetNavigation(view) {
             var connSel = view.querySelector('#rcsConnectionSelect');
             var schemaSel = view.querySelector('#rcsSchemaSelect');
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var currentRuleSet = currentRuleSetIndex >= 0
-                ? ruleSetsFile.RuleSets[currentRuleSetIndex]
-                : null;
+            var currentRuleSet = store.ruleSetById(store.get('currentRuleSetId'));
             var currentSchema = currentRuleSet
                 ? store.get('schemas').filter(function (schema) {
                     return schema.Id === currentRuleSet.EndpointSchemaId;
@@ -49,27 +87,20 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function blockDirtyRuleSetNavigation(view, destinationName) {
-            if (!store.isRuleSetsDirty()) return false;
-            alert('Save or discard your Rule Set changes before switching ' + destinationName + '.');
+            if (editorSession.allowNavigation(destinationName, null, function (blocked) {
+                alert(editorSession.blockedMessage(blocked));
+            })) return false;
             restoreRuleSetNavigation(view);
             return true;
         }
 
         function captureCurrentEditsIntoFile(view) {
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            if (currentRuleSetIndex < 0) return;
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
+            var current = store.ruleSetById(store.get('currentRuleSetId'));
             if (!current) return;
-            if (!store.isRuleSetEdited(current.Id)) return;
             var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
             if (!rootGroupEl) return;
-            if (current.IsBuiltIn) {
-                var drafts = store.get('builtInRuleDraftRootsById');
-                drafts[current.Id] = ruleBuilderTab.readGroupFromDom(rootGroupEl);
-            } else {
-                current.Root = ruleBuilderTab.readGroupFromDom(rootGroupEl);
-            }
+            if (current.IsBuiltIn) return;
+            current.Root = ruleBuilderTab.readGroupFromDom(rootGroupEl);
         }
 
         function renderRuleSetSelect(view) {
@@ -77,21 +108,21 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             select.innerHTML = '';
 
             var matching = ruleSetsForCurrentSchema(view);
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
+            var currentRuleSetId = store.get('currentRuleSetId');
 
             matching.forEach(function (x) {
                 var opt = document.createElement('option');
-                opt.value = String(x.idx);
+                opt.value = x.rs.Id;
                 opt.innerText = (x.rs.Name || '(unnamed)') + (x.rs.IsBuiltIn ? ' 🔒' : '');
-                if (x.idx === currentRuleSetIndex) opt.selected = true;
+                if (x.rs.Id === currentRuleSetId) opt.selected = true;
                 select.appendChild(opt);
             });
 
             if (matching.length === 0) {
-                store.set('currentRuleSetIndex', -1);
-            } else if (!matching.some(function (x) { return x.idx === currentRuleSetIndex; })) {
-                store.set('currentRuleSetIndex', matching[0].idx);
-                select.value = String(matching[0].idx);
+                store.set('currentRuleSetId', '');
+            } else if (!matching.some(function (x) { return x.rs.Id === currentRuleSetId; })) {
+                store.set('currentRuleSetId', matching[0].rs.Id);
+                select.value = matching[0].rs.Id;
             }
         }
 
@@ -109,24 +140,17 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             ruleBuilderTab.renderRuleRawResponse(view, schemaId);
             refreshRuleSetDirtyState(view);
 
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var ruleSetsFile = store.get('ruleSetsFile');
+            var ruleSet = store.ruleSetById(store.get('currentRuleSetId'));
 
-            if (currentRuleSetIndex < 0) {
-                var hint = document.createElement('div');
-                hint.className = 'rcsEmptyHint';
-                hint.innerText = 'No rule sets exist yet for this endpoint — click "+ New" to create one.';
-                list.appendChild(hint);
+            if (!ruleSet) {
                 return;
             }
-
-            var ruleSet = ruleSetsFile.RuleSets[currentRuleSetIndex];
 
             if (ruleSet.IsBuiltIn) {
                 var lockNotice = document.createElement('div');
                 lockNotice.className = 'fieldDescription';
                 lockNotice.style.marginBottom = '0.8em';
-                lockNotice.innerText = '🔒 This is a protected built-in Rule Set. You can test and edit it here; Save will ask for a new Rule Set name and preserve the built-in unchanged.';
+                lockNotice.innerText = '🔒 This is a read-only built-in Rule Set. Use Duplicate to create an editable copy.';
                 list.appendChild(lockNotice);
             }
 
@@ -143,26 +167,28 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     if (renderToken !== canvasRenderToken) return; // superseded by a newer render — drop this response
                     if (loadingHint.parentNode) loadingHint.parentNode.removeChild(loadingHint);
 
-                    var onChange = function () { ruleBuilderTab.scheduleAutoPreview(view, true); };
-                    var drafts = store.get('builtInRuleDraftRootsById');
-                    var displayedRoot = drafts[ruleSet.Id] || ruleSet.Root || emptyRoot();
-                    list.appendChild(ruleBuilderTab.buildGroupNode(displayedRoot, true, onChange, connectionId, schemaId));
+                    var onChange = function () {
+                        captureCurrentEditsIntoFile(view);
+                        store.emit('ruleSetsDirtyStateChanged');
+                        ruleBuilderTab.scheduleAutoPreview(view, false);
+                    };
+                    var displayedRoot = ruleSet.Root || emptyRoot();
+                    list.appendChild(ruleBuilderTab.buildGroupNode(
+                        displayedRoot, true, onChange, connectionId, schemaId, !!ruleSet.IsBuiltIn));
 
                     ruleBuilderTab.scheduleAutoPreview(view, false);
                 });
         }
 
-        function switchRuleSetTo(view, idx) {
-            captureCurrentEditsIntoFile(view);
-            store.set('currentRuleSetIndex', idx);
+        function switchRuleSetTo(view, ruleSetId) {
+            store.set('currentRuleSetId', ruleSetId);
             renderRuleSetSelect(view);
             renderCanvasForCurrentIndex(view);
         }
 
         function onSchemaChanged(view) {
-            captureCurrentEditsIntoFile(view);
             var matching = ruleSetsForCurrentSchema(view);
-            store.set('currentRuleSetIndex', matching.length ? matching[0].idx : -1);
+            store.set('currentRuleSetId', matching.length ? matching[0].rs.Id : '');
             renderRuleSetSelect(view);
             renderCanvasForCurrentIndex(view);
         }
@@ -239,11 +265,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     var schemaId = view.querySelector('#rcsSchemaSelect').value;
                     if (!connectionId || !schemaId) return;
 
-                    // Refresh rebuilds the canvas just like navigation does.
-                    // Persist the live DOM first so an unsaved custom rule or
-                    // built-in draft is rendered back instead of disappearing.
-                    captureCurrentEditsIntoFile(view);
-
                     // forceRefresh=true bypasses both this client's cache and
                     // the server's LastResponseCacheStore — a plain client-side
                     // cache delete alone would still return the same stale
@@ -254,33 +275,27 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function snapshotRuleSetsSaved() {
-            store.set('ruleSetsSavedSnapshot', JSON.stringify(store.get('ruleSetsFile') || { RuleSets: [] }));
-            store.clearRuleSetEditFlags();
-            store.set('builtInRuleDraftRootsById', {});
+            ruleSetsRestoreSnapshot = JSON.stringify(store.get('ruleSetsFile') || { RuleSets: [] });
+            store.set('ruleSetsSavedSnapshot', ruleSetsForComparison(store.get('ruleSetsFile')));
         }
 
         function refreshRuleSetDirtyState(view) {
             var warning = view.querySelector('#rcsDirtyWarning');
             var discard = view.querySelector('#rcsDiscardBtn');
             if (!warning) return;
-            var dirty = store.isRuleSetsDirty();
+            var dirty = ruleSetsAreDirty();
             warning.innerText = dirty ? 'Unsaved changes' : '';
             if (discard) discard.disabled = !dirty;
         }
 
         function discardRuleSetChanges(view) {
-            if (store.get('ruleSetsSavedSnapshot') === null) return;
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var selected = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
-            var selectedId = selected ? selected.Id : '';
-            var restored = JSON.parse(store.get('ruleSetsSavedSnapshot'));
-            store.clearRuleSetEditFlags();
-            store.set('builtInRuleDraftRootsById', {});
+            if (ruleSetsRestoreSnapshot === null) return;
+            var selectedId = store.get('currentRuleSetId');
+            var restored = JSON.parse(ruleSetsRestoreSnapshot);
             store.set('ruleSetsFile', restored, 'ruleSetsChanged');
-            var newIndex = restored.RuleSets.findIndex(function (ruleSet) { return ruleSet.Id === selectedId; });
+            var selectedExists = restored.RuleSets.some(function (ruleSet) { return ruleSet.Id === selectedId; });
             var matching = ruleSetsForCurrentSchema(view);
-            store.set('currentRuleSetIndex', newIndex >= 0 ? newIndex : (matching.length ? matching[0].idx : -1));
+            store.set('currentRuleSetId', selectedExists ? selectedId : (matching.length ? matching[0].rs.Id : ''));
             renderRuleSetSelect(view);
             renderCanvasForCurrentIndex(view);
             view.querySelector('#rcsSaveStatus').innerText = '';
@@ -288,21 +303,22 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function saveRuleSets(view) {
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
+            if (savingRuleSets) return;
+            var currentRuleSetId = store.get('currentRuleSetId');
             var rootGroupEl = view.querySelector('#conditionsList > .rcsGroupRoot');
 
-            // currentRuleSetIndex < 0 is a legitimate state after deleting
+            // An empty selection is legitimate after deleting
             // the last rule set for this schema — there's nothing to
             // validate or capture from the canvas, just a pending deletion
             // already sitting in ruleSetsFile that still needs to reach the
             // server. Only bail out here when a rule set IS supposed to be
             // selected but its DOM is unexpectedly missing.
-            if (currentRuleSetIndex >= 0 && !rootGroupEl) {
+            if (currentRuleSetId && !rootGroupEl) {
                 Dashboard.alert('No rule set is selected to save. Create one with "+ New" first.');
                 return;
             }
 
-            if (currentRuleSetIndex >= 0 && rootGroupEl) {
+            if (currentRuleSetId && rootGroupEl) {
                 var invalidNodes = ruleBuilderTab.findInvalidConditionElements(rootGroupEl);
                 ruleBuilderTab.highlightInvalid(rootGroupEl, invalidNodes);
 
@@ -324,33 +340,18 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             }
 
             var ruleSetsFile = store.get('ruleSetsFile');
-            var current = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
+            var current = store.ruleSetById(currentRuleSetId);
             if (current && current.IsBuiltIn) {
-                var copyName = prompt(
-                    'The built-in Rule Set "' + current.Name.replace(/^\[Built-in\]\s*/, '') +
-                    '" cannot be overwritten.\nName the new Rule Set for these edits:',
-                    current.Name.replace(/^\[Built-in\]\s*/, '') + ' custom');
-                if (!copyName || !copyName.trim()) return;
-                copyName = copyName.trim();
-                if (store.ruleSetNameExists(current.EndpointSchemaId, copyName)) {
-                    Dashboard.alert('Rule Set names must be unique within a Schema.');
-                    return;
-                }
-                var copy = JSON.parse(JSON.stringify(current));
-                copy.Id = helpers.newId();
-                copy.Name = copyName;
-                copy.IsBuiltIn = false;
-                copy.Root = ruleBuilderTab.readGroupFromDom(rootGroupEl);
-                ruleSetsFile.RuleSets.push(copy);
-                store.set('currentRuleSetIndex', ruleSetsFile.RuleSets.length - 1);
-                ruleBuilderTab.markRuleSetsDirty(view);
-                renderRuleSetSelect(view);
+                Dashboard.alert('Built-in Rule Sets are read-only. Use Duplicate to create an editable copy.');
+                return;
             } else {
                 captureCurrentEditsIntoFile(view);
             }
 
             var statusEl = view.querySelector('#rcsSaveStatus');
             statusEl.innerText = 'Saving…';
+            savingRuleSets = true;
+            editorSession.setBusy(view, 'ruleSets', true);
 
             ApiClient.ajax({
                 type: 'POST',
@@ -364,7 +365,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 var affected = (result && result.AffectedFolderCount) || 0;
                 statusEl.innerText = affected > 0 ? 'Saved. Folder tree resync started.' : 'Saved.';
                 store.emit('ruleSetsChanged');
+                savingRuleSets = false;
+                editorSession.setBusy(view, 'ruleSets', false);
             }).catch(function () {
+                savingRuleSets = false;
+                editorSession.setBusy(view, 'ruleSets', false);
                 statusEl.innerText = '';
                 Dashboard.alert('Save failed — see server log.');
             });
@@ -372,8 +377,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         function exportRuleSet(view) {
             var ruleSetsFile = store.get('ruleSetsFile');
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var source = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
+            var source = store.ruleSetById(store.get('currentRuleSetId'));
             if (!source) { Dashboard.alert('No Rule Set selected to export.'); return; }
 
             var exported = JSON.parse(JSON.stringify(source));
@@ -433,7 +437,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     return;
                 }
                 ruleSetsFile.RuleSets.push(parsed);
-                store.set('currentRuleSetIndex', ruleSetsFile.RuleSets.length - 1);
+                store.set('currentRuleSetId', parsed.Id);
                 ruleBuilderTab.markRuleSetsDirty(view);
                 renderRuleSetSelect(view);
                 renderCanvasForCurrentIndex(view);
@@ -447,27 +451,27 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         function wireRuleSetToolbar(view) {
             view.querySelector('#rcsRuleSetSelect').addEventListener('change', function (e) {
                 if (blockDirtyRuleSetNavigation(view, 'Rule Sets')) return;
-                switchRuleSetTo(view, parseInt(e.target.value, 10));
+                switchRuleSetTo(view, e.target.value);
             });
 
             view.querySelector('#rcsNewRuleSet').addEventListener('click', function () {
-                captureCurrentEditsIntoFile(view);
+                if (blockDirtyRuleSetNavigation(view, 'Rule Sets')) return;
                 var schemaId = view.querySelector('#rcsSchemaSelect').value;
                 var name = prompt('Name for the new rule set:', 'New Rule Set');
                 if (!name) return;
                 if (store.ruleSetNameExists(schemaId, name)) { Dashboard.alert('Rule Set names must be unique within a Schema.'); return; }
                 var ruleSetsFile = store.get('ruleSetsFile');
-                ruleSetsFile.RuleSets.push({ Id: helpers.newId(), Name: name.trim(), EndpointSchemaId: schemaId, IsBuiltIn: false, Root: emptyRoot() });
+                var created = { Id: helpers.newId(), Name: name.trim(), EndpointSchemaId: schemaId, IsBuiltIn: false, Root: emptyRoot() };
+                ruleSetsFile.RuleSets.push(created);
                 ruleBuilderTab.markRuleSetsDirty(view);
-                switchRuleSetTo(view, ruleSetsFile.RuleSets.length - 1);
+                switchRuleSetTo(view, created.Id);
             });
 
             view.querySelector('#rcsDuplicateRuleSet').addEventListener('click', function () {
-                captureCurrentEditsIntoFile(view);
+                if (blockDirtyRuleSetNavigation(view, 'Rule Sets')) return;
                 var ruleSetsFile = store.get('ruleSetsFile');
-                var currentRuleSetIndex = store.get('currentRuleSetIndex');
-                var source = ruleSetsFile.RuleSets[currentRuleSetIndex];
-                if (currentRuleSetIndex < 0 || !source) { Dashboard.alert('No rule set selected to duplicate.'); return; }
+                var source = store.ruleSetById(store.get('currentRuleSetId'));
+                if (!source) { Dashboard.alert('No rule set selected to duplicate.'); return; }
                 var defaultName = (source.Name || '').replace(/^\[Built-in\]\s*/, '') + ' copy';
                 var name = prompt('Name for the duplicated rule set:', defaultName);
                 if (!name) return;
@@ -476,20 +480,15 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 clone.Id = helpers.newId();
                 clone.Name = name.trim();
                 clone.IsBuiltIn = false;
-                var drafts = store.get('builtInRuleDraftRootsById');
-                if (drafts[source.Id]) {
-                    clone.Root = JSON.parse(JSON.stringify(drafts[source.Id]));
-                }
                 ruleSetsFile.RuleSets.push(clone);
                 ruleBuilderTab.markRuleSetsDirty(view);
-                switchRuleSetTo(view, ruleSetsFile.RuleSets.length - 1);
+                switchRuleSetTo(view, clone.Id);
             });
 
             view.querySelector('#rcsRenameRuleSet').addEventListener('click', function () {
                 var ruleSetsFile = store.get('ruleSetsFile');
-                var currentRuleSetIndex = store.get('currentRuleSetIndex');
-                var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
-                if (currentRuleSetIndex < 0 || !current) { Dashboard.alert('No rule set selected to rename.'); return; }
+                var current = store.ruleSetById(store.get('currentRuleSetId'));
+                if (!current) { Dashboard.alert('No rule set selected to rename.'); return; }
                 if (current.IsBuiltIn) { Dashboard.alert('Built-in rule sets are read-only. Use Duplicate to make an editable copy.'); return; }
                 var name = prompt('Rename rule set:', current.Name);
                 if (!name) return;
@@ -501,25 +500,80 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             view.querySelector('#rcsDeleteRuleSet').addEventListener('click', function () {
                 var ruleSetsFile = store.get('ruleSetsFile');
-                var currentRuleSetIndex = store.get('currentRuleSetIndex');
-                var current = ruleSetsFile.RuleSets[currentRuleSetIndex];
-                if (currentRuleSetIndex < 0 || !current) {
+                var current = store.ruleSetById(store.get('currentRuleSetId'));
+                if (!current) {
                     Dashboard.alert('No rule set selected to delete.');
                     return;
                 }
                 if (current.IsBuiltIn) { Dashboard.alert('Built-in rule sets are read-only and cannot be deleted.'); return; }
+                var sameSchema = ruleSetsForCurrentSchema(view).map(function (item) { return item.rs; });
+                var deletedIndex = sameSchema.findIndex(function (ruleSet) { return ruleSet.Id === current.Id; });
                 var currentTree = store.get('currentTree');
-                if (store.folderTreeUsesAnyRuleSet(currentTree && currentTree.RootFolder, [current.Id])) {
-                    Dashboard.alert('This Rule Set cannot be deleted because a Folder Fetch uses it.');
+                var references = store.folderTreeReferencesForRuleSets(
+                    currentTree && currentTree.RootFolder, [current.Id]);
+                if (references.length) {
+                    Dashboard.alert(helpers.folderFetchDependencyMessage(
+                        'Rule Set', current.Name, references));
+                    return;
+                }
+
+                var savedFile = ruleSetsRestoreSnapshot === null
+                    ? { RuleSets: [] }
+                    : JSON.parse(ruleSetsRestoreSnapshot);
+                var persisted = savedFile.RuleSets.some(function (ruleSet) { return ruleSet.Id === current.Id; });
+                if (!persisted) {
+                    ruleSetsFile.RuleSets = ruleSetsFile.RuleSets.filter(function (ruleSet) { return ruleSet.Id !== current.Id; });
+                    var localRemaining = ruleSetsFile.RuleSets.filter(function (ruleSet) {
+                        return ruleSet.EndpointSchemaId === current.EndpointSchemaId;
+                    });
+                    switchRuleSetTo(view, editorSession.selectionAfterDeletion(
+                        localRemaining, deletedIndex, function (ruleSet) { return ruleSet.Id; }));
+                    refreshRuleSetDirtyState(view);
+                    return;
+                }
+                if (ruleSetsAreDirty()) {
+                    Dashboard.alert('Save or discard your Rule Set changes before deleting a saved Rule Set.');
                     return;
                 }
                 if (!confirm('Delete rule set "' + current.Name + '"?')) {
                     return;
                 }
-                ruleSetsFile.RuleSets.splice(currentRuleSetIndex, 1);
-                ruleBuilderTab.markRuleSetsDirty(view);
-                var remaining = ruleSetsForCurrentSchema(view);
-                switchRuleSetTo(view, remaining.length ? remaining[0].idx : -1);
+
+                var status = view.querySelector('#rcsSaveStatus');
+                status.innerText = 'Deleting\u2026';
+                savingRuleSets = true;
+                editorSession.setBusy(view, 'ruleSets', true);
+                ApiClient.ajax({
+                    type: 'DELETE',
+                    url: ApiClient.getUrl('ChannelSync/RuleSets/' + encodeURIComponent(current.Id)),
+                    dataType: 'json'
+                }).then(function (result) {
+                    if (!result || result.Success !== true) {
+                        savingRuleSets = false;
+                        editorSession.setBusy(view, 'ruleSets', false);
+                        status.innerText = 'Deletion blocked -- nothing was removed.';
+                        Dashboard.alert((result && result.Error) || 'The Rule Set could not be deleted.');
+                        return;
+                    }
+                    var newRuleSets = (result && result.RuleSets) || [];
+                    var remaining = newRuleSets.filter(function (ruleSet) {
+                        return ruleSet.EndpointSchemaId === current.EndpointSchemaId;
+                    });
+                    var nextRuleSetId = editorSession.selectionAfterDeletion(
+                        remaining, deletedIndex, function (ruleSet) { return ruleSet.Id; });
+                    store.set('ruleSetsFile', { RuleSets: newRuleSets });
+                    store.set('currentRuleSetId', nextRuleSetId);
+                    store.emit('ruleSetsChanged');
+                    snapshotRuleSetsSaved();
+                    refreshRuleSetDirtyState(view);
+                    status.innerText = 'Deleted.';
+                    savingRuleSets = false;
+                    editorSession.setBusy(view, 'ruleSets', false);
+                }).catch(function () {
+                    savingRuleSets = false;
+                    editorSession.setBusy(view, 'ruleSets', false);
+                    status.innerText = 'Delete failed -- nothing was removed. See server log.';
+                });
             });
 
             view.querySelector('#rcsExportRuleSet').addEventListener('click', function () { exportRuleSet(view); });
@@ -554,6 +608,12 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 renderRuleSetSelect(view);
                 renderCanvasForCurrentIndex(view);
             });
+            store.on('ruleSetsChanged', function () {
+                renderRuleSetSelect(view);
+                renderCanvasForCurrentIndex(view);
+                snapshotRuleSetsSaved();
+                refreshRuleSetDirtyState(view);
+            });
             store.on('ruleSetsDirtyStateChanged', function () { refreshRuleSetDirtyState(view); });
         }
 
@@ -563,6 +623,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderRuleSetSelect: renderRuleSetSelect,
             renderCanvasForCurrentIndex: renderCanvasForCurrentIndex,
             refreshRuleSetDirtyState: refreshRuleSetDirtyState,
-            hasUnsavedChanges: function () { return store.isRuleSetsDirty(); }
+            ruleSetsForComparison: ruleSetsForComparison,
+            hasUnsavedChanges: ruleSetsAreDirty,
+            isSaving: function () { return savingRuleSets; }
         };
     });

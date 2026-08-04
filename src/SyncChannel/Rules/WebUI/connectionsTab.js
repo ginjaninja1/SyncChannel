@@ -1,7 +1,8 @@
 define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
+        'configurationpage?name=SyncChannelEditorSessionJs',
         'configurationpage?name=SyncChannelDirtyTrackerJs',
         'configurationpage?name=SyncChannelSharedHelpersJs'],
-    function ($, store, dirtyTracker, helpers) {
+    function ($, store, editorSession, dirtyTracker, helpers) {
         'use strict';
 
         // The Application dropdown's preset table. Single source of truth
@@ -18,6 +19,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         var KNOWN_SYSTEM_TYPES = ['radarr', 'sonarr'];
 
         var tracker = dirtyTracker.createTracker(editableConnectionsJson);
+        var saving = false;
 
         function editableConnectionsJson(items) {
             return JSON.stringify((items || []).map(function (connection) {
@@ -69,13 +71,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             // read connectionsSavedFullSnapshot, found it permanently null,
             // and silently no-op'd on every Discard click.
             store.set('connectionsSavedFullSnapshot', JSON.stringify(store.get('connections')));
-            store.set('pendingConnectionRemovals', {});
-            var schemaOrder = {};
-            store.get('schemas').forEach(function (schema, index) { schemaOrder[schema.Id] = index; });
-            store.set('connectionSchemaOrder', schemaOrder);
-            var ruleOrder = {};
-            (store.get('ruleSetsFile').RuleSets || []).forEach(function (rs, index) { ruleOrder[rs.Id] = index; });
-            store.set('connectionRuleOrder', ruleOrder);
         }
 
         function refreshDirtyState(view) {
@@ -99,38 +94,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 }
             });
 
-            var schemas = store.get('schemas');
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var pendingRemovals = store.get('pendingConnectionRemovals');
-            Object.keys(pendingRemovals).forEach(function (connectionId) {
-                var removed = pendingRemovals[connectionId];
-                (removed.Schemas || []).forEach(function (schema) {
-                    if (!schemas.some(function (existing) { return existing.Id === schema.Id; })) schemas.push(schema);
-                });
-                (removed.RuleSets || []).forEach(function (rs) {
-                    if (!ruleSetsFile.RuleSets.some(function (existing) { return existing.Id === rs.Id; })) {
-                        ruleSetsFile.RuleSets.push(rs);
-                    }
-                });
-            });
-
-            var schemaOrder = store.get('connectionSchemaOrder');
-            schemas.sort(function (a, b) {
-                var ai = schemaOrder.hasOwnProperty(a.Id) ? schemaOrder[a.Id] : Number.MAX_SAFE_INTEGER;
-                var bi = schemaOrder.hasOwnProperty(b.Id) ? schemaOrder[b.Id] : Number.MAX_SAFE_INTEGER;
-                return ai - bi;
-            });
-            var ruleOrder = store.get('connectionRuleOrder');
-            ruleSetsFile.RuleSets.sort(function (a, b) {
-                var ai = ruleOrder.hasOwnProperty(a.Id) ? ruleOrder[a.Id] : Number.MAX_SAFE_INTEGER;
-                var bi = ruleOrder.hasOwnProperty(b.Id) ? ruleOrder[b.Id] : Number.MAX_SAFE_INTEGER;
-                return ai - bi;
-            });
-
-            store.set('pendingConnectionRemovals', {});
             store.set('connections', restored);
-            store.set('schemas', schemas, 'schemasChanged');
-            store.set('ruleSetsFile', ruleSetsFile, 'ruleSetsChanged');
             view.querySelector('#connStatus').innerText = '';
             renderConnectionsTab(view);
             store.emit('connectionsChanged');
@@ -172,7 +136,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     c.DisplayLabel = e.target.value;
                     c.DisplayLabelIsUserEntered = !!e.target.value;
                 });
-                labelInput.addEventListener('change', function () { store.emit('connectionsChanged'); });
 
                 var urlInput = document.createElement('input');
                 urlInput.style.width = '16em';
@@ -247,14 +210,12 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
                     refreshKnownSystemTypesFromConnections();
                     renderSystemTypeDatalist(view);
-                    store.emit('connectionsChanged');
                 });
 
                 customTypeInput.addEventListener('input', function (e) {
                     c.SystemType = e.target.value;
                     refreshKnownSystemTypesFromConnections();
                     renderSystemTypeDatalist(view);
-                    store.emit('connectionsChanged');
                 });
 
                 paramNameInput.addEventListener('input', function (e) {
@@ -297,35 +258,91 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 removeBtn.innerText = '\u2715';
                 removeBtn.title = 'Remove connection';
                 removeBtn.addEventListener('click', function () {
-                    var schemas = store.get('schemas');
                     var ruleSetsFile = store.get('ruleSetsFile');
                     var ownedSchemas = store.schemasForConnection(c.Id);
                     var ownedSchemaIds = ownedSchemas.map(function (s) { return s.Id; });
                     var ownedRuleSets = ruleSetsFile.RuleSets
                         .filter(function (rs) { return ownedSchemaIds.indexOf(rs.EndpointSchemaId) !== -1; });
                     var ownedRuleIds = ownedRuleSets.map(function (rs) { return rs.Id; });
-                    if (store.folderTreeUsesAnyRuleSet(store.get('currentTree'), ownedRuleIds)) {
-                        Dashboard.alert('This connection cannot be removed because a Folder Fetch uses one of its Rule Sets.');
+                    var persisted = !!store.get('persistedConnectionIds')[c.Id];
+
+                    // Removing a never-saved row is cancellation, not a server
+                    // deletion. This is the only deletion path that mutates
+                    // locally before a request succeeds.
+                    if (!persisted) {
+                        connections.splice(idx, 1);
+                        store.set('connections', connections);
+                        renderConnectionsTab(view);
+                        refreshDirtyState(view);
                         return;
                     }
-                    if (!confirm('Remove connection "' + c.DisplayLabel + '" and all of its Schemas and Rule Sets?')) return;
+                    if (tracker.isDirty(store.get('connections'))) {
+                        Dashboard.alert('Save or discard your Connection changes before deleting a saved Connection.');
+                        return;
+                    }
 
-                    var pendingRemovals = store.get('pendingConnectionRemovals');
-                    pendingRemovals[c.Id] = {
-                        Schemas: JSON.parse(JSON.stringify(ownedSchemas)),
-                        RuleSets: JSON.parse(JSON.stringify(ownedRuleSets))
-                    };
-                    store.set('pendingConnectionRemovals', pendingRemovals);
-                    store.set('schemas', schemas.filter(function (s) { return s.ConnectionId !== c.Id; }), 'schemasChanged');
-                    ruleSetsFile.RuleSets = ruleSetsFile.RuleSets.filter(function (rs) {
-                        return ownedSchemaIds.indexOf(rs.EndpointSchemaId) === -1;
+                    var currentTree = store.get('currentTree');
+                    var references = store.folderTreeReferencesForRuleSets(
+                        currentTree && currentTree.RootFolder, ownedRuleIds);
+                    if (references.length) {
+                        Dashboard.alert(helpers.folderFetchDependencyMessage(
+                            'connection', c.DisplayLabel, references));
+                        return;
+                    }
+                    // Built-ins are generated scaffolding owned by the
+                    // connection, not user data. They disappear implicitly
+                    // and must never be presented as destructive cascade
+                    // targets. Only custom dependants need an explicit warning.
+                    if (!confirm(helpers.connectionDeletionMessage(
+                        c.DisplayLabel, ownedSchemas, ownedRuleSets))) return;
+
+                    var statusEl = view.querySelector('#connStatus');
+                    statusEl.innerText = 'Deleting\u2026';
+                    saving = true;
+                    editorSession.setBusy(view, 'connections', true);
+                    ApiClient.ajax({
+                        type: 'DELETE',
+                        url: ApiClient.getUrl('ChannelSync/Connections/' + encodeURIComponent(c.Id)),
+                        dataType: 'json'
+                    }).then(function (result) {
+                        if (!result || result.Success !== true) {
+                            saving = false;
+                            editorSession.setBusy(view, 'connections', false);
+                            statusEl.innerText = 'Deletion blocked -- nothing was removed.';
+                            Dashboard.alert((result && result.Error) || 'The Connection could not be deleted.');
+                            return;
+                        }
+                        var newConnections = (result && result.Connections) || [];
+                        var newSchemas = (result && result.Schemas) || [];
+                        var newRuleSets = (result && result.RuleSets) || [];
+                        var persistedIds = {};
+                        newConnections.forEach(function (connection) { persistedIds[connection.Id] = true; });
+
+                        store.set('connections', newConnections);
+                        store.set('persistedConnectionIds', persistedIds);
+                        store.set('schemas', newSchemas);
+                        store.set('ruleSetsFile', { RuleSets: newRuleSets });
+                        if (!newSchemas.some(function (schema) { return schema.Id === store.get('currentSchemaId'); })) {
+                            store.set('currentSchemaId', '');
+                        }
+                        if (!newRuleSets.some(function (ruleSet) { return ruleSet.Id === store.get('currentRuleSetId'); })) {
+                            store.set('currentRuleSetId', '');
+                        }
+
+                        snapshotSaved();
+                        renderConnectionsTab(view);
+                        store.emit('connectionsChanged');
+                        store.emit('schemasChanged');
+                        store.emit('ruleSetsChanged');
+                        refreshDirtyState(view);
+                        statusEl.innerText = 'Deleted.';
+                        saving = false;
+                        editorSession.setBusy(view, 'connections', false);
+                    }).catch(function () {
+                        saving = false;
+                        editorSession.setBusy(view, 'connections', false);
+                        statusEl.innerText = 'Delete failed \u2014 nothing was removed. See server log.';
                     });
-                    store.set('ruleSetsFile', ruleSetsFile, 'ruleSetsChanged');
-                    connections.splice(idx, 1);
-                    store.set('connections', connections);
-                    renderConnectionsTab(view);
-                    store.emit('connectionsChanged');
-                    refreshDirtyState(view);
                 });
 
                 var testBtn = document.createElement('span');
@@ -426,10 +443,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             store.set('connections', connections);
             renderConnectionsTab(view);
             refreshDirtyState(view);
-            store.emit('connectionsChanged');
         }
 
         function saveConnections(view) {
+            if (saving) return;
             var connections = store.get('connections');
             var statusEl = view.querySelector('#connStatus');
             var connectionNames = {};
@@ -443,13 +460,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             }
 
             var selectedSchemaId = store.get('currentSchemaId');
-            var currentRuleSetIndex = store.get('currentRuleSetIndex');
-            var ruleSetsFile = store.get('ruleSetsFile');
-            var selectedRuleSet = currentRuleSetIndex >= 0 ? ruleSetsFile.RuleSets[currentRuleSetIndex] : null;
-            var selectedRuleSetId = selectedRuleSet ? selectedRuleSet.Id : '';
-            var localCustomSchemas = store.get('schemas').filter(function (s) { return !s.IsBuiltIn; });
-            var localCustomRuleSets = ruleSetsFile.RuleSets.filter(function (rs) { return !rs.IsBuiltIn; });
+            var selectedRuleSetId = store.get('currentRuleSetId');
             statusEl.innerText = 'Saving\u2026';
+            saving = true;
+            editorSession.setBusy(view, 'connections', true);
 
             ApiClient.ajax({
                 type: 'POST',
@@ -473,24 +487,26 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
                     var serverSchemas = (results[1] && results[1].Schemas) || [];
                     var serverRuleSets = (results[2] && results[2].RuleSets) || [];
-                    var newSchemas = localCustomSchemas.concat(serverSchemas.filter(function (s) { return s.IsBuiltIn; }));
-                    var newRuleSetsFile = {
-                        RuleSets: localCustomRuleSets.concat(serverRuleSets.filter(function (rs) { return rs.IsBuiltIn; }))
-                    };
+                    var newSchemas = serverSchemas;
+                    var newRuleSetsFile = { RuleSets: serverRuleSets };
                     store.set('schemas', newSchemas, 'schemasChanged');
                     store.set('ruleSetsFile', newRuleSetsFile, 'ruleSetsChanged');
                     store.set('currentSchemaId', selectedSchemaId);
 
                     var matching = store.ruleSetsForSchema(selectedSchemaId);
-                    var selectedRuleIndex = newRuleSetsFile.RuleSets.findIndex(function (rs) { return rs.Id === selectedRuleSetId; });
-                    store.set('currentRuleSetIndex', selectedRuleIndex >= 0 ? selectedRuleIndex : (matching.length ? matching[0].idx : -1));
+                    var selectedRuleExists = newRuleSetsFile.RuleSets.some(function (rs) { return rs.Id === selectedRuleSetId; });
+                    store.set('currentRuleSetId', selectedRuleExists ? selectedRuleSetId : (matching.length ? matching[0].rs.Id : ''));
 
                     renderConnectionsTab(view);
                     store.emit('connectionsChanged');
                     snapshotSaved();
                     refreshDirtyState(view);
+                    saving = false;
+                    editorSession.setBusy(view, 'connections', false);
                 });
             }).catch(function () {
+                saving = false;
+                editorSession.setBusy(view, 'connections', false);
                 statusEl.innerText = 'Save failed \u2014 see server log.';
             });
         }
@@ -584,7 +600,6 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 store.set('connections', connections);
                 panel.style.display = 'none';
                 renderConnectionsTab(view);
-                store.emit('connectionsChanged');
                 refreshDirtyState(view);
             };
             panel.style.display = '';
@@ -620,6 +635,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderConnectionsTab: renderConnectionsTab,
             refreshDirtyState: refreshDirtyState,
             renderSystemTypeDatalist: renderSystemTypeDatalist,
-            hasUnsavedChanges: function () { return tracker.isDirty(store.get('connections')); }
+            hasUnsavedChanges: function () { return tracker.isDirty(store.get('connections')); },
+            isSaving: function () { return saving; }
         };
     });

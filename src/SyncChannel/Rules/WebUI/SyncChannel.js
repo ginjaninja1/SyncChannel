@@ -1,27 +1,16 @@
 define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
+        'configurationpage?name=SyncChannelEditorSessionJs',
         'configurationpage?name=SyncChannelConnectionsTabJs',
         'configurationpage?name=SyncChannelSchemaEditorTabJs',
         'configurationpage?name=SyncChannelRuleSetManagerTabJs',
         'configurationpage?name=SyncChannelFolderTreeTabJs'],
-    function ($, store, connectionsTab, schemaEditorTab, ruleSetManagerTab, folderTreeTab) {
+    function ($, store, editorSession, connectionsTab, schemaEditorTab, ruleSetManagerTab, folderTreeTab) {
         'use strict';
+        var pageNavigationGuardWired = false;
 
-        // Every tab keeps its own edits live in the shared store as you
-        // type, saved independently per tab (see each tab's own Save
-        // button) — there's no cross-tab draft/undo, so switching tabs out
-        // from under an unsaved edit would silently strand it or, worse,
-        // get scooped up by whatever the next tab's Save button submits.
-        // Simplest robust fix: block the switch outright until the current
-        // tab's changes are saved or discarded, matching the same rule
-        // already enforced within the Schema tab's own dropdowns.
-        function unsavedChangesTabName() {
-            if (connectionsTab.hasUnsavedChanges()) return 'Connections';
-            if (schemaEditorTab.hasUnsavedChanges()) return 'Endpoint Schemas';
-            if (ruleSetManagerTab.hasUnsavedChanges()) return 'Rule Sets';
-            if (folderTreeTab.hasUnsavedChanges()) return 'Folder Tree';
-            return null;
-        }
-
+        // One coordinator owns every navigation decision. An editor with a
+        // dirty draft (or a save in flight) keeps the operator on that screen
+        // until Save or Discard resolves it.
         function wireTabs(view) {
             var buttons = view.querySelectorAll('.mcsTabBtn');
 
@@ -50,9 +39,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     e.preventDefault();
 
                     if (!btn.classList.contains('mcsTabActive')) {
-                        var blockingTab = unsavedChangesTabName();
-                        if (blockingTab) {
-                            alert('Save or discard your changes on the "' + blockingTab + '" tab before switching tabs.');
+                        if (!editorSession.allowNavigation(btn.dataset.tab, null, function (blocked) {
+                            alert(editorSession.blockedMessage(blocked));
+                        })) {
                             return;
                         }
                     }
@@ -75,6 +64,26 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             });
 
             if (buttons.length) activateTab(buttons[0]);
+        }
+
+        function wirePageNavigationGuard(view) {
+            if (pageNavigationGuardWired) return;
+            pageNavigationGuardWired = true;
+            document.addEventListener('click', function (event) {
+                var anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+                if (!anchor) return;
+                var blocked = editorSession.blocker();
+                if (!blocked) return;
+                event.preventDefault();
+                event.stopPropagation();
+                alert(editorSession.blockedMessage(blocked));
+            }, true);
+
+            window.addEventListener('beforeunload', function (event) {
+                if (!editorSession.blocker()) return;
+                event.preventDefault();
+                event.returnValue = '';
+            });
         }
 
         // ===================================================================
@@ -108,6 +117,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 schemaEditorTab.init(view);
                 ruleSetManagerTab.init(view);
                 folderTreeTab.init(view);
+
+                editorSession.register('connections', 'Connections', connectionsTab.hasUnsavedChanges, connectionsTab.isSaving);
+                editorSession.register('schemas', 'Endpoint Schemas', schemaEditorTab.hasUnsavedChanges, schemaEditorTab.isSaving);
+                editorSession.register('ruleSets', 'Rule Sets', ruleSetManagerTab.hasUnsavedChanges, ruleSetManagerTab.isSaving);
+                editorSession.register('tree', 'Folder Tree', folderTreeTab.hasUnsavedChanges, folderTreeTab.isSaving);
             }).catch(function () {
                 Dashboard.alert('Failed to load Channel Sync configuration — see server log.');
             });
@@ -136,6 +150,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 if (view.syncChannelInitialized) return;
                 view.syncChannelInitialized = true;
                 wireTabs(view);
+                wirePageNavigationGuard(view);
                 loadAll(view);
             });
         };

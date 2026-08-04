@@ -1,12 +1,14 @@
 define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
+        'configurationpage?name=SyncChannelEditorSessionJs',
         'configurationpage?name=SyncChannelSharedHelpersJs',
         'configurationpage?name=SyncChannelDirtyTrackerJs'],
-    function ($, store, helpers, dirtyTracker) {
+    function ($, store, editorSession, helpers, dirtyTracker) {
         'use strict';
 
         var tracker = dirtyTracker.createTracker(function (tree) { return JSON.stringify(tree); });
         var pendingFetchEditors = 0;
         var activeView = null;
+        var savingFolderTree = false;
 
         // dirtyTracker only exposes compare (isDirty) + UI (refreshUi), not
         // the raw snapshot itself — same split connectionsTab.js uses (see
@@ -344,6 +346,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             nameInput.addEventListener('change', function () {
                 node.DisplayName = nameInput.value.trim() || (node.IsRoot ? 'Channel Sync' : 'Untitled Folder');
                 nameInput.value = node.DisplayName;
+                refreshFolderTreeDirtyState(activeView);
             });
             header.appendChild(nameInput);
 
@@ -363,6 +366,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 tagInput.addEventListener('change', function () {
                     node.Tag = tagInput.value.trim() || 'SyncChannel';
                     tagInput.value = node.Tag;
+                    refreshFolderTreeDirtyState(activeView);
                 });
                 header.appendChild(tagInput);
             }
@@ -381,6 +385,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 imageUpdateCheckbox.checked = !!node.ReplaceImageOnContentChange;
                 imageUpdateCheckbox.addEventListener('change', function () {
                     node.ReplaceImageOnContentChange = imageUpdateCheckbox.checked;
+                    refreshFolderTreeDirtyState(activeView);
                 });
 
                 imageUpdateLabel.appendChild(imageUpdateCheckbox);
@@ -484,12 +489,15 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function saveFolderTree(view) {
+            if (savingFolderTree) return;
             var statusEl = view.querySelector('#ftStatus');
             statusEl.innerText = 'Saving…';
 
             view.querySelectorAll('.ftFetch').forEach(function (el) { el.classList.remove('ftFetchInvalid'); });
 
             var currentTree = store.get('currentTree');
+            savingFolderTree = true;
+            editorSession.setBusy(view, 'tree', true);
             ApiClient.ajax({
                 type: 'POST',
                 url: ApiClient.getUrl('ChannelSync/FolderTree'),
@@ -498,8 +506,9 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 dataType: 'json'
             }).then(function (result) {
                 if (!result.Success) {
-                    statusEl.innerHTML = 'Not saved — ' + result.Errors.length + ' fetch(es) reference something that no longer exists:<br>' +
-                        result.Errors.map(function (e) { return '⚠ ' + e.Message; }).join('<br>');
+                    statusEl.innerText = 'Not saved — ' + result.Errors.length +
+                        ' fetch(es) reference something that no longer exists:\n' +
+                        result.Errors.map(function (e) { return '⚠ ' + e.Message; }).join('\n');
 
                     result.Errors.forEach(function (e) {
                         var wrapper = view.querySelector('[data-fetch-id="' + e.FetchId + '"]');
@@ -511,13 +520,19 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
                     var firstBad = view.querySelector('.ftFetchInvalid');
                     if (firstBad) firstBad.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    savingFolderTree = false;
+                    editorSession.setBusy(view, 'tree', false);
                     return;
                 }
 
                 statusEl.innerText = 'Saved. Folder tree resync started.';
                 snapshotFolderTreeSaved();
                 refreshFolderTreeDirtyState(view);
+                savingFolderTree = false;
+                editorSession.setBusy(view, 'tree', false);
             }).catch(function () {
+                savingFolderTree = false;
+                editorSession.setBusy(view, 'tree', false);
                 statusEl.innerText = 'Save failed — see server log.';
             });
         }
@@ -545,6 +560,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderTree: renderTree,
             hasUnsavedChanges: function () {
                 return pendingFetchEditors > 0 || tracker.isDirty(store.get('currentTree'));
-            }
+            },
+            isSaving: function () { return savingFolderTree; }
         };
     });

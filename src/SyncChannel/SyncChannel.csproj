@@ -27,6 +27,7 @@
 		<None Remove="Rules\WebUI\dragEngine.js" />
 		<None Remove="Rules\WebUI\store.js" />
 		<None Remove="Rules\WebUI\dirtyTracker.js" />
+		<None Remove="Rules\WebUI\editorSession.js" />
 		<None Remove="Rules\WebUI\fieldDiscovery.js" />
 		<None Remove="Rules\WebUI\sharedHelpers.js" />
 		<None Remove="Rules\WebUI\connectionsTab.js" />
@@ -51,6 +52,7 @@
 		<EmbeddedResource Include="Rules\WebUI\dragEngine.js" />
 		<EmbeddedResource Include="Rules\WebUI\store.js" />
 		<EmbeddedResource Include="Rules\WebUI\dirtyTracker.js" />
+		<EmbeddedResource Include="Rules\WebUI\editorSession.js" />
 		<EmbeddedResource Include="Rules\WebUI\fieldDiscovery.js" />
 		<EmbeddedResource Include="Rules\WebUI\sharedHelpers.js" />
 		<EmbeddedResource Include="Rules\WebUI\connectionsTab.js" />
