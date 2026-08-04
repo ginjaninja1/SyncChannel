@@ -315,6 +315,13 @@ namespace SyncChannel.Configuration
         public FieldMapping AlbumArtistField { get; set; } = new FieldMapping();
         public FieldMapping AlbumField { get; set; } = new FieldMapping();
         public FieldMapping CatalogueArtistField { get; set; } = new FieldMapping();
+        public FieldMapping CatalogueArtistOverviewField { get; set; } = new FieldMapping();
+        public FieldMapping CatalogueArtistPosterUrlField { get; set; } = new FieldMapping();
+        public FieldMapping AlbumOverviewField { get; set; } = new FieldMapping();
+        public FieldMapping AlbumPosterUrlField { get; set; } = new FieldMapping();
+        public FieldMapping AlbumYearField { get; set; } = new FieldMapping();
+        public FieldMapping TrackNumberField { get; set; } = new FieldMapping();
+        public FieldMapping DiscNumberField { get; set; } = new FieldMapping();
 
         // Grouping/metadata for profiles where one row is below a Series.
         // PlayableItemsAsEpisodes requires ShowIdentity + ShowTitle; rows are

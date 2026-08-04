@@ -269,6 +269,25 @@
 				padding: 0.6em; border: 1px solid rgba(255,255,255,0.28); border-radius: 8px;
 				background: rgba(255,255,255,0.025);
 				}
+				.esObjectMapper { margin: 1.2em 0; }
+				.esObjectPath { display:flex; align-items:center; flex-wrap:wrap; gap:0.45em; margin:0.5em 0 1em; }
+				.esObjectChoice { padding:0.55em 0.8em; border-radius:7px; border:1px solid rgba(95,170,255,0.42); background:rgba(40,105,180,0.13); color:inherit; cursor:pointer; }
+				.esObjectChoice.selected { background:rgba(55,145,245,0.34); border-color:rgba(115,195,255,0.9); box-shadow:0 0 0 2px rgba(70,155,245,0.18); }
+				.esObjectArrow { color:rgba(125,190,255,0.85); font-size:1.25em; }
+				.esObjectPanel { padding:0.9em; border-radius:9px; border:1px solid rgba(95,170,255,0.32); background:rgba(25,75,130,0.08); }
+				.esObjectPanel > h3 { margin-top:0; }
+				.esConcreteType { margin:-0.35em 0 0.9em; }
+				.esExpectedType, .esSourceTypeBadge { align-self:center; padding:0.14em 0.42em; border-radius:4px; font-size:0.68em; font-weight:700; letter-spacing:0.04em; border:1px solid currentColor; }
+				.esSourceTypeBadge { margin-left:0.35em; pointer-events:none; }
+				.esType-string { --es-type-rgb:72,145,235; }
+				.esType-list { --es-type-rgb:85,112,225; }
+				.esType-number { --es-type-rgb:45,175,215; }
+				.esType-bool { --es-type-rgb:55,125,190; }
+				.esType-date { --es-type-rgb:80,175,180; }
+				.esMapRow.esType-string, .esMapRow.esType-list, .esMapRow.esType-number, .esMapRow.esType-bool, .esMapRow.esType-date { background:rgba(var(--es-type-rgb),0.07); border-color:rgba(var(--es-type-rgb),0.42); }
+				.esExpectedType.esType-string, .esExpectedType.esType-list, .esExpectedType.esType-number, .esExpectedType.esType-bool, .esExpectedType.esType-date,
+				.esSourceTypeBadge { color:rgb(var(--es-type-rgb)); background:rgba(var(--es-type-rgb),0.13); }
+				#esPaletteChips .esType-string, #esPaletteChips .esType-list, #esPaletteChips .esType-number, #esPaletteChips .esType-bool, #esPaletteChips .esType-date { --chip-rgb:var(--es-type-rgb); background:rgba(var(--es-type-rgb),0.16); border-color:rgba(var(--es-type-rgb),0.5); }
 				.esMapLegend { min-width: 9em; flex-shrink: 0; align-self: center; cursor: help; }
 				.esMapValue {
 				display: flex; flex: 1 1 30em; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 0.4em;

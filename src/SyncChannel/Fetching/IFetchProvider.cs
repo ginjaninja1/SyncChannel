@@ -56,6 +56,13 @@ namespace SyncChannel.Fetching
         public List<string> AlbumArtists { get; set; } = new List<string>();
         public string Album { get; set; } = string.Empty;
         public string CatalogueArtist { get; set; } = string.Empty;
+        public string CatalogueArtistOverview { get; set; } = string.Empty;
+        public string CatalogueArtistPosterUrl { get; set; } = string.Empty;
+        public string AlbumOverview { get; set; } = string.Empty;
+        public string AlbumPosterUrl { get; set; } = string.Empty;
+        public int? AlbumYear { get; set; }
+        public int? TrackNumber { get; set; }
+        public int? DiscNumber { get; set; }
 
         // The actual playable/viewable media URL or local path. This is
         // distinct from PosterUrl: a poster describes an item, while this

@@ -282,7 +282,8 @@ namespace SyncChannel.Channels
                     Name = !string.IsNullOrWhiteSpace(first.CatalogueArtist)
                         ? first.CatalogueArtist
                         : (first.AlbumArtists.FirstOrDefault() ?? first.ArtistIdentity),
-                    ImageUrl = first.PosterUrl,
+                    Overview = first.CatalogueArtistOverview,
+                    ImageUrl = first.CatalogueArtistPosterUrl,
                     Type = ChannelItemType.Folder,
                     FolderType = ChannelFolderType.MusicArtist,
                     ForceUpdate = true
@@ -424,7 +425,9 @@ namespace SyncChannel.Channels
                     {
                         Id = CatalogueAlbumIdPrefix + parts[0] + "::" + parts[1] + "::" + parts[2] + "::" + first.AlbumIdentity,
                         Name = string.IsNullOrWhiteSpace(first.Album) ? first.AlbumIdentity : first.Album,
-                        ImageUrl = first.PosterUrl,
+                        Overview = first.AlbumOverview,
+                        ImageUrl = first.AlbumPosterUrl,
+                        ProductionYear = first.AlbumYear,
                         Type = ChannelItemType.Folder,
                         FolderType = ChannelFolderType.MusicAlbum,
                         ForceUpdate = true
@@ -456,6 +459,8 @@ namespace SyncChannel.Channels
                     ContentType = ChannelMediaContentType.Song,
                     Artists = MappedNames(source.Artists, source.Artist),
                     AlbumArtists = MappedNames(source.AlbumArtists, source.AlbumArtist),
+                    IndexNumber = source.TrackNumber,
+                    ParentIndexNumber = source.DiscNumber,
                     ForceUpdate = true
                 };
                 TrySetChannelItemAlbum(track, source.Album);

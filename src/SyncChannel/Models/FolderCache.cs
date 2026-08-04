@@ -69,6 +69,13 @@ namespace SyncChannel.Models
         public List<string> AlbumArtists { get; set; } = new List<string>();
         public string Album { get; set; } = string.Empty;
         public string CatalogueArtist { get; set; } = string.Empty;
+        public string CatalogueArtistOverview { get; set; } = string.Empty;
+        public string CatalogueArtistPosterUrl { get; set; } = string.Empty;
+        public string AlbumOverview { get; set; } = string.Empty;
+        public string AlbumPosterUrl { get; set; } = string.Empty;
+        public int? AlbumYear { get; set; }
+        public int? TrackNumber { get; set; }
+        public int? DiscNumber { get; set; }
 
         // Playable/viewable source for every media-bearing destination.
         public string MediaFileUrl { get; set; } = string.Empty;
