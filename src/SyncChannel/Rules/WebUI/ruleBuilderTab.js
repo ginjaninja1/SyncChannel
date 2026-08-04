@@ -382,12 +382,16 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 var parsed;
                 try { parsed = JSON.parse(rawValue); } catch (e) { parsed = { path: rawValue, type: 'String', display: rawValue }; }
 
+                var previousType = currentType();
+                var previousValueWidget = valueHolder.querySelector('.rcsValueWidget');
+                var previousValue = previousValueWidget ? previousValueWidget.dataset.value : '';
+
                 fieldSlot.dataset.value = parsed.path;
                 fieldSlot.dataset.fieldType = parsed.type;
                 fieldSlot.innerText = parsed.display;
                 fieldSlot.classList.add('rcsSlot-filled');
                 refreshOperatorLock();
-                rebuildValueWidget();
+                rebuildValueWidget(previousType === parsed.type ? previousValue : '');
                 if (onChange) onChange();
             });
 

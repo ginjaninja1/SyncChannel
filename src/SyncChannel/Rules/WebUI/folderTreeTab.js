@@ -5,6 +5,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         'use strict';
 
         var tracker = dirtyTracker.createTracker(function (tree) { return JSON.stringify(tree); });
+        var pendingFetchEditors = 0;
+        var activeView = null;
 
         // dirtyTracker only exposes compare (isDirty) + UI (refreshUi), not
         // the raw snapshot itself — same split connectionsTab.js uses (see
@@ -19,6 +21,29 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         function refreshFolderTreeDirtyState(view) {
             tracker.refreshUi(view, '#ftDirtyWarning', '#ftDiscardBtn', store.get('currentTree'));
+
+            if (pendingFetchEditors > 0) {
+                var warning = view.querySelector('#ftDirtyWarning');
+                var discard = view.querySelector('#ftDiscardBtn');
+                warning.innerText = tracker.isDirty(store.get('currentTree'))
+                    ? 'Unsaved changes — finish or cancel the open fetch editor'
+                    : 'Finish or cancel the open fetch editor';
+                if (discard) discard.disabled = false;
+            }
+        }
+
+        function beginFetchEditor(container) {
+            if (container.dataset.fetchEditorOpen === 'true') return;
+            container.dataset.fetchEditorOpen = 'true';
+            pendingFetchEditors++;
+            if (activeView) refreshFolderTreeDirtyState(activeView);
+        }
+
+        function endFetchEditor(container) {
+            if (container.dataset.fetchEditorOpen !== 'true') return;
+            delete container.dataset.fetchEditorOpen;
+            pendingFetchEditors = Math.max(0, pendingFetchEditors - 1);
+            if (activeView) refreshFolderTreeDirtyState(activeView);
         }
 
         function discardFolderTreeChanges(view) {
@@ -35,6 +60,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         function openFetchFieldForm(container, folderNode, existingFetch, onChange) {
             container.innerHTML = '';
+            beginFetchEditor(container);
 
             var panel = document.createElement('div');
             panel.className = 'ftPanel';
@@ -178,6 +204,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     });
                 }
 
+                endFetchEditor(container);
                 container.innerHTML = '';
                 onChange();
             });
@@ -186,7 +213,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             cancelBtn.setAttribute('is', 'emby-button');
             cancelBtn.type = 'button';
             cancelBtn.innerText = 'Cancel';
-            cancelBtn.addEventListener('click', function () { container.innerHTML = ''; });
+            cancelBtn.addEventListener('click', function () {
+                endFetchEditor(container);
+                container.innerHTML = '';
+            });
 
             btnRow.appendChild(saveBtn);
             btnRow.appendChild(cancelBtn);
@@ -446,6 +476,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         function renderTree(view) {
             var container = view.querySelector('#ftRoot');
+            pendingFetchEditors = 0;
             container.innerHTML = '';
             var currentTree = store.get('currentTree');
             container.appendChild(buildFolderNode(currentTree.RootFolder, null, function () { renderTree(view); }));
@@ -492,6 +523,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         }
 
         function init(view) {
+            activeView = view;
             view.querySelector('#ftSaveBtn').addEventListener('click', function () { saveFolderTree(view); });
             view.querySelector('#ftDiscardBtn').addEventListener('click', function () { discardFolderTreeChanges(view); });
             snapshotFolderTreeSaved();
@@ -511,6 +543,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         return {
             init: init,
             renderTree: renderTree,
-            hasUnsavedChanges: function () { return tracker.isDirty(store.get('currentTree')); }
+            hasUnsavedChanges: function () {
+                return pendingFetchEditors > 0 || tracker.isDirty(store.get('currentTree'));
+            }
         };
     });
