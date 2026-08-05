@@ -83,7 +83,7 @@
 				}
 				.rcsChip:active { cursor: grabbing; }
 				.rcsChip-field     { background: rgba(82,158,255,0.18);  border-color: rgba(82,158,255,0.4); }
-				.rcsChip-field-favorite { background: rgba(40,95,190,0.55);  border-color: rgba(40,95,190,0.85); }
+				.rcsChip-field-favorite { background: rgba(40,95,190,0.55); border-color: rgba(105,175,255,0.95); box-shadow: 0 0 0 2px rgba(55,125,225,0.22); }
 				.rcsChip-operator  { background: rgba(255,181,77,0.18);  border-color: rgba(255,181,77,0.4); }
 				.rcsChip-logic     { background: rgba(190,140,255,0.18); border-color: rgba(190,140,255,0.4); }
 				.rcsChip-not       { background: rgba(255,90,90,0.18);   border-color: rgba(255,90,90,0.45); }
@@ -99,7 +99,7 @@
 				font-weight: 600;
 				}
 
-				.rcsFieldTypeTag { font-size: 0.7em; opacity: 0.55; margin-left: 0.3em; }
+				.rcsFieldTypeTag { font-size: 0.68em; margin-left: 0.4em; }
 				.rcsRefreshFieldsBtn { float: right; font-size: 0.7em; padding: 0.1em 0.5em; opacity: 0.75; }
 				.rcsFieldHint { font-size: 0.85em; opacity: 0.6; font-style: italic; }
 
@@ -279,15 +279,10 @@
 				.esConcreteType { margin:-0.35em 0 0.9em; }
 				.esExpectedType, .esSourceTypeBadge { align-self:center; padding:0.14em 0.42em; border-radius:4px; font-size:0.68em; font-weight:700; letter-spacing:0.04em; border:1px solid currentColor; }
 				.esSourceTypeBadge { margin-left:0.35em; pointer-events:none; }
-				.esType-string { --es-type-rgb:72,145,235; }
-				.esType-list { --es-type-rgb:85,112,225; }
-				.esType-number { --es-type-rgb:45,175,215; }
-				.esType-bool { --es-type-rgb:55,125,190; }
-				.esType-date { --es-type-rgb:80,175,180; }
-				.esMapRow.esType-string, .esMapRow.esType-list, .esMapRow.esType-number, .esMapRow.esType-bool, .esMapRow.esType-date { background:rgba(var(--es-type-rgb),0.07); border-color:rgba(var(--es-type-rgb),0.42); }
-				.esExpectedType.esType-string, .esExpectedType.esType-list, .esExpectedType.esType-number, .esExpectedType.esType-bool, .esExpectedType.esType-date,
-				.esSourceTypeBadge { color:rgb(var(--es-type-rgb)); background:rgba(var(--es-type-rgb),0.13); }
-				#esPaletteChips .esType-string, #esPaletteChips .esType-list, #esPaletteChips .esType-number, #esPaletteChips .esType-bool, #esPaletteChips .esType-date { --chip-rgb:var(--es-type-rgb); background:rgba(var(--es-type-rgb),0.16); border-color:rgba(var(--es-type-rgb),0.5); }
+				.esExpectedType, .esSourceTypeBadge { color:#fff; background:#315f8f; border-color:#9dccff; text-shadow:0 1px 1px rgba(0,0,0,0.8); }
+				.esRequiredMark { color:#ff5c5c; font-weight:800; }
+				.esMapActions { display:flex; flex-direction:column; align-items:stretch; justify-content:center; gap:0.1em; }
+				.esMapActions .rcsIconBtn { text-align:center; }
 				.esMapLegend { min-width: 9em; flex-shrink: 0; align-self: center; cursor: help; }
 				.esMapValue {
 				display: flex; flex: 1 1 30em; flex-wrap: wrap; align-content: flex-start; align-items: center; gap: 0.4em;

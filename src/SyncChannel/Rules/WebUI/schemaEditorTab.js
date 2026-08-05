@@ -52,6 +52,12 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 (/\.(jpe?g|png|gif|webp|bmp|svg)(?:[?#].*)?$/i.test(value) || /image|poster|thumb|art/i.test(roleHint || ''));
         }
 
+        function isCrossOriginUrl(value) {
+            var parser = document.createElement('a');
+            parser.href = value;
+            return parser.protocol !== window.location.protocol || parser.host !== window.location.host;
+        }
+
         // Single hover-preview implementation for every anchor that shows
         // resolved examples — the row legend, a mapping's Field chips, a
         // Function/Array badge, and a palette chip all call this the same
@@ -63,7 +69,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // image-like — falls back to the plain native title tooltip
         // (stacked lines via '\n', default text, no custom background,
         // exactly how the legend already behaved for non-image fields).
-        function updateHoverPreview(anchorEl, examples, roleHint) {
+        function updateHoverPreview(anchorEl, examples, roleHint, connectionId) {
             var nonNull = (examples || []).filter(function (e) { return e !== null; });
             var allImages = nonNull.length > 0 && nonNull.every(function (e) { return isSingleImageValue(e, roleHint); });
 
@@ -71,16 +77,62 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 anchorEl.title = '';
                 var panel = ensureFloatingExamplesPanel();
                 panel.innerHTML = '';
+                var loadedCount = 0;
+                var settledCount = 0;
+                function imageSettled(didLoad) {
+                    settledCount++;
+                    if (didLoad) loadedCount++;
+                    if (settledCount === nonNull.length && loadedCount === 0) {
+                        panel.style.display = 'none';
+                        anchorEl.title = examples.map(function (e) { return e === null ? 'null' : e; }).join('\n');
+                    }
+                }
                 nonNull.forEach(function (url) {
                     var img = document.createElement('img');
+                    var triedProxy = false;
+                    var triedDirect = false;
                     img.className = 'esMapExampleImage';
-                    img.src = url;
                     img.alt = url;
                     img.title = url;
-                    img.addEventListener('error', function () {
+                    img.addEventListener('load', function () { imageSettled(true); });
+
+                    function settleFailure() {
                         if (img.parentNode) img.parentNode.removeChild(img);
+                        imageSettled(false);
+                    }
+                    function loadDirect() {
+                        triedDirect = true;
+                        img.src = url;
+                    }
+                    function loadThroughProxy() {
+                        triedProxy = true;
+                        ApiClient.ajax({
+                            type: 'POST',
+                            url: ApiClient.getUrl('ChannelSync/ImagePreview'),
+                            data: JSON.stringify({ ConnectionId: connectionId, Url: url }),
+                            contentType: 'application/json',
+                            dataType: 'json'
+                        }).then(function (result) {
+                            if (result && result.ContentType && result.Data) {
+                                img.src = 'data:' + result.ContentType + ';base64,' + result.Data;
+                            } else if (!triedDirect) {
+                                loadDirect();
+                            } else {
+                                settleFailure();
+                            }
+                        }).catch(function () {
+                            if (!triedDirect) loadDirect();
+                            else settleFailure();
+                        });
+                    }
+                    img.addEventListener('error', function () {
+                        if (!triedProxy && connectionId) loadThroughProxy();
+                        else if (!triedDirect) loadDirect();
+                        else settleFailure();
                     });
                     panel.appendChild(img);
+                    if (connectionId && isCrossOriginUrl(url)) loadThroughProxy();
+                    else loadDirect();
                 });
                 if (!panel.children.length) { panel.style.display = 'none'; return; }
                 var rect = anchorEl.getBoundingClientRect();
@@ -102,7 +154,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             { value: 'PlayableItemsAsEpisodes', label: 'Playable items as episodes (group rows by Show and Season)' },
             { value: 'Videos', label: 'Videos (each row is a playable Video)' },
             { value: 'AudioTracks', label: 'Audio tracks (each row is a Track)' },
-            { value: 'MusicCatalogueExperimental', label: 'Music catalogue (experimental for testing)' },
+            { value: 'MusicCatalogueExperimental', label: 'Music catalogue (experimental)' },
             { value: 'PhotoCollection', label: 'Photo collection (this fetch is one Album; each row is a Photo)' },
             { value: 'NestedMedia', label: 'Advanced nested media' }
         ];
@@ -603,6 +655,30 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var legend = document.createElement('label');
             legend.className = 'esMapLegend';
             legend.innerText = labelText;
+            var currentSchema = store.currentSchema();
+            var requiredRoles = ['IdentityField', 'TitleField'];
+            if (currentSchema && currentSchema.Presentation === 'PlayableItemsAsEpisodes') {
+                requiredRoles = requiredRoles.concat(['ShowIdentityField', 'ShowTitleField']);
+            } else if (currentSchema && currentSchema.Presentation === 'MusicCatalogueExperimental') {
+                requiredRoles = requiredRoles.concat(['ArtistIdentityField', 'CatalogueArtistField', 'ArtistField',
+                    'AlbumIdentityField', 'AlbumField', 'MediaFileUrlField']);
+            } else if (currentSchema && currentSchema.Presentation === 'AudioTracks') {
+                requiredRoles.push('MediaFileUrlField');
+            }
+            if (requiredRoles.indexOf(warnRoleKey) !== -1) {
+                var requiredMark = document.createElement('span');
+                requiredMark.className = 'esRequiredMark';
+                requiredMark.innerText = ' *';
+                requiredMark.title = 'Required: this schema cannot be saved while this field is empty.';
+                legend.appendChild(requiredMark);
+            } else if (currentSchema && currentSchema.Presentation === 'PhotoCollection' &&
+                (warnRoleKey === 'MediaFileUrlField' || warnRoleKey === 'PosterUrlField')) {
+                var alternativeMark = document.createElement('span');
+                alternativeMark.className = 'esRequiredMark';
+                alternativeMark.innerText = ' *';
+                alternativeMark.title = 'Required alternative: at least one of Media item URL / path or Primary image URL must be mapped.';
+                legend.appendChild(alternativeMark);
+            }
             legend.tabIndex = 0;
             line.appendChild(legend);
             var expectedBadge = document.createElement('span');
@@ -612,6 +688,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             line.appendChild(expectedBadge);
 
             if (!locked) {
+                var actionStack = document.createElement('span');
+                actionStack.className = 'esMapActions';
                 var clearBtn = document.createElement('span');
                 clearBtn.className = 'rcsIconBtn esMapClear';
                 clearBtn.innerText = 'Clear';
@@ -620,7 +698,24 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     markSchemasDirty(activeView);
                     renderSegments();
                 });
-                line.appendChild(clearBtn);
+                actionStack.appendChild(clearBtn);
+                var copyExamplesBtn = document.createElement('button');
+                copyExamplesBtn.type = 'button';
+                copyExamplesBtn.className = 'rcsIconBtn esMapCopy';
+                copyExamplesBtn.innerText = 'Copy';
+                copyExamplesBtn.title = 'Copy the three current resolved text examples to the clipboard.';
+                copyExamplesBtn.addEventListener('click', function () {
+                    var text = resolvedExamples(true, true).map(function (value) { return value === null ? 'null' : value; }).join('\n');
+                    helpers.copyTextToClipboard(text).then(function () {
+                        copyExamplesBtn.innerText = 'Copied';
+                        setTimeout(function () { copyExamplesBtn.innerText = 'Copy'; }, 1200);
+                    }).catch(function () {
+                        copyExamplesBtn.innerText = 'Failed';
+                        setTimeout(function () { copyExamplesBtn.innerText = 'Copy'; }, 1600);
+                    });
+                });
+                actionStack.appendChild(copyExamplesBtn);
+                line.appendChild(actionStack);
             }
 
             var valueEl = document.createElement('span');
@@ -666,7 +761,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 return values.length ? values : null;
             }
 
-            function previewResolveNode(node, fbp, connection, exampleIndex) {
+            function previewResolveNode(node, fbp, connection, exampleIndex, revealSecrets) {
                 switch (node.Kind) {
                     case 'Field':
                         var field = fbp[node.Value];
@@ -680,17 +775,19 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     case 'ApiKeyName':
                         return { text: (connection && connection.ApiKeyParamName) || '', hasFieldValue: false };
                     case 'ApiKeyValue':
-                        return { text: (connection && connection.ApiKey) ? '\u2022\u2022\u2022\u2022\u2022\u2022' : '', hasFieldValue: false };
+                        return { text: (connection && connection.ApiKey)
+                            ? (revealSecrets ? connection.ApiKey : '\u2022\u2022\u2022\u2022\u2022\u2022')
+                            : '', hasFieldValue: false };
                     case 'Identity':
                         return { text: '{identity}', hasFieldValue: false };
                     case 'Function':
-                        return previewResolveFunction(node, fbp, connection, exampleIndex);
+                        return previewResolveFunction(node, fbp, connection, exampleIndex, revealSecrets);
                     default:
                         return { text: '', hasFieldValue: false };
                 }
             }
 
-            function previewResolveFunction(node, fbp, connection, exampleIndex) {
+            function previewResolveFunction(node, fbp, connection, exampleIndex, revealSecrets) {
                 if (node.Function === 'ArraySlice') {
                     if (node.Children.length === 1 && node.Children[0].Kind === 'Field') {
                         var field = fbp[node.Children[0].Value];
@@ -728,7 +825,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 }
                 var hasFieldValue = false;
                 var joined = node.Children.map(function (c) {
-                    var r = previewResolveNode(c, fbp, connection, exampleIndex);
+                    var r = previewResolveNode(c, fbp, connection, exampleIndex, revealSecrets);
                     if (r.hasFieldValue) hasFieldValue = true;
                     return r.text;
                 }).join('');
@@ -757,7 +854,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             // segments at all (pure literal text) resolves identically for
             // every record, so that case collapses to a single line instead
             // of showing the same text three times.
-            function resolvedExamples() {
+            function resolvedExamples(preserveRecordCount, revealSecrets) {
                 var fbp = fieldsByPath();
                 var connection = mapperConnId ? store.findConnection(mapperConnId) : null;
                 var perRecord = [];
@@ -765,7 +862,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 for (var exampleIndex = 0; exampleIndex < 3; exampleIndex++) {
                     var hasFieldValue = false;
                     var value = mapping.Segments.map(function (seg) {
-                        var r = previewResolveNode(seg, fbp, connection, exampleIndex);
+                        var r = previewResolveNode(seg, fbp, connection, exampleIndex, revealSecrets);
                         if (r.hasFieldValue) hasFieldValue = true;
                         return r.text;
                     }).join('');
@@ -773,7 +870,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     perRecord.push({ value: value, hasFieldValue: hasFieldValue });
                 }
 
-                if (!anyFieldValue) {
+                if (!anyFieldValue && !preserveRecordCount) {
                     return perRecord[0].value ? [perRecord[0].value] : [];
                 }
 
@@ -797,7 +894,10 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             }
 
             function showLegendPreview() {
-                updateHoverPreview(legend, resolvedExamples(), warnRoleKey || labelText);
+                // The browser must receive the usable URL here. In particular,
+                // Emby authenticates image endpoints with the api_key query
+                // segment, so the masked display value cannot be used as img.src.
+                updateHoverPreview(legend, resolvedExamples(false, true), warnRoleKey || labelText, mapperConnId);
             }
             legend.addEventListener('mouseenter', showLegendPreview);
             legend.addEventListener('mouseleave', hideHoverPreview);
@@ -1193,10 +1293,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     renderSchemaPaletteChips(view, connectionId, schemaId, chipsWrap);
                     ruleBuilderTab.persistFieldFavorite(schemaId, f.JsonPath, field.IsFavorite);
                 });
-                chip.classList.add(typeClass(f.Type));
                 var typeBadge = chip.querySelector('.rcsFieldTypeTag');
                 if (typeBadge) {
-                    typeBadge.classList.add('esSourceTypeBadge');
                     typeBadge.innerText = String(f.Type || 'String').toUpperCase();
                 }
 
@@ -1593,6 +1691,14 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                     selectedPresentationObjectBySchemaId[schema.Id] = object.key;
                     renderSchemaForm(view);
                 });
+                if (object.key !== selected) {
+                    dragEngine.registerHoverTarget(button,
+                        ['field'].concat(STATIC_MAPPING_DRAG_KINDS).concat(['mapfunction', 'mapseg', 'mapmapping']),
+                        function () {
+                            selectedPresentationObjectBySchemaId[schema.Id] = object.key;
+                            renderSchemaForm(view);
+                        });
+                }
                 path.appendChild(button);
             });
             wrap.appendChild(path);

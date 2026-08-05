@@ -104,6 +104,17 @@
         public bool ForceRefresh { get; set; }
     }
 
+    // Browser image previews normally load their resolved URL directly. If
+    // the remote application disallows cross-origin images, the editor uses
+    // this same-origin fallback. The service validates the URL against the
+    // selected saved connection before making any request.
+    [Route("/ChannelSync/ImagePreview", "POST")]
+    public class GetImagePreview : IReturn<object>
+    {
+        public string ConnectionId { get; set; }
+        public string Url { get; set; }
+    }
+
     // ---- Field favorites. Deliberately its own route, not folded into
     // SaveEndpointSchemas — see FieldFavoritesStore for why. ----
     [Route("/ChannelSync/FieldFavorite", "POST")]
@@ -166,6 +177,74 @@
         }
 
         public object Get(GetConnections r) => connectionsStore.Load();
+
+        public async Task<object> Post(GetImagePreview r)
+        {
+            const int maxImageBytes = 8 * 1024 * 1024;
+            var connection = connectionsStore.Load().Connections.FirstOrDefault(c =>
+                string.Equals(c.Id, r.ConnectionId, StringComparison.OrdinalIgnoreCase));
+            if (connection == null)
+                throw new ArgumentException("The preview connection no longer exists.");
+
+            if (!Uri.TryCreate(connection.BaseUrl, UriKind.Absolute, out var baseUri) ||
+                !Uri.TryCreate(r.Url, UriKind.Absolute, out var imageUri) ||
+                (imageUri.Scheme != Uri.UriSchemeHttp && imageUri.Scheme != Uri.UriSchemeHttps) ||
+                !string.Equals(baseUri.Scheme, imageUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(baseUri.Host, imageUri.Host, StringComparison.OrdinalIgnoreCase) ||
+                baseUri.Port != imageUri.Port ||
+                !ImagePathBelongsToConnection(baseUri, imageUri))
+                throw new ArgumentException("The preview URL does not belong to the selected connection.");
+
+            var options = new HttpRequestOptions
+            {
+                Url = imageUri.AbsoluteUri,
+                CancellationToken = CancellationToken.None
+            };
+            using (var response = await httpClient.GetResponse(options).ConfigureAwait(false))
+            using (var source = response.Content)
+            using (var destination = new MemoryStream())
+            {
+                if (response.ContentLength.HasValue && response.ContentLength.Value > maxImageBytes)
+                    throw new ArgumentException("The preview image is larger than 8 MB.");
+
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await source.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+                {
+                    if (destination.Length + read > maxImageBytes)
+                        throw new ArgumentException("The preview image is larger than 8 MB.");
+                    destination.Write(buffer, 0, read);
+                }
+
+                var bytes = destination.ToArray();
+                var contentType = DetectImageContentType(response.ContentType, bytes);
+                if (contentType == null)
+                    throw new ArgumentException("The preview endpoint did not return a supported image.");
+
+                return new { ContentType = contentType, Data = Convert.ToBase64String(bytes) };
+            }
+        }
+
+        private static bool ImagePathBelongsToConnection(Uri baseUri, Uri imageUri)
+        {
+            var basePath = baseUri.AbsolutePath.TrimEnd('/');
+            if (basePath.Length == 0) return true;
+            return imageUri.AbsolutePath.Equals(basePath, StringComparison.OrdinalIgnoreCase) ||
+                imageUri.AbsolutePath.StartsWith(basePath + "/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string DetectImageContentType(string reportedContentType, byte[] bytes)
+        {
+            var contentType = (reportedContentType ?? string.Empty).Split(';')[0].Trim();
+            if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return contentType;
+            if (bytes.Length >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) return "image/jpeg";
+            if (bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4e && bytes[3] == 0x47) return "image/png";
+            if (bytes.Length >= 6 && bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46) return "image/gif";
+            if (bytes.Length >= 12 && bytes[0] == 0x52 && bytes[1] == 0x49 && bytes[2] == 0x46 && bytes[3] == 0x46 &&
+                bytes[8] == 0x57 && bytes[9] == 0x45 && bytes[10] == 0x42 && bytes[11] == 0x50) return "image/webp";
+            if (bytes.Length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4d) return "image/bmp";
+            return null;
+        }
 
         public object Post(SaveConnections r)
         {

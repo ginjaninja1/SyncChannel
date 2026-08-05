@@ -172,8 +172,8 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 : 'Right-click to favorite — pins it to the top of the palette';
 
             var tag = document.createElement('span');
-            tag.className = 'rcsFieldTypeTag';
-            tag.innerText = '(' + type + ')';
+            tag.className = 'rcsFieldTypeTag esSourceTypeBadge esType-' + String(type || 'String').toLowerCase();
+            tag.innerText = String(type || 'String').toUpperCase();
             chip.appendChild(tag);
 
             chip.dataset.dragLabel = displayName || fieldPath;

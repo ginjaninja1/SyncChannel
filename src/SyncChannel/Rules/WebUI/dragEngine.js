@@ -13,6 +13,7 @@ define([], function () {
     // state and dispatches.
     // ===================================================================
     var dropTargetRegistry = [];
+    var hoverTargetRegistry = [];
     var activeDrag = null;
     var highlightedTarget = null;
     var dragScrollContainer = null;
@@ -22,8 +23,17 @@ define([], function () {
 
     function resetDragEngine() {
         dropTargetRegistry = [];
+        hoverTargetRegistry = [];
         activeDrag = null;
         highlightedTarget = null;
+    }
+
+    // A drag hover target changes surrounding UI without consuming the
+    // eventual drop. This is useful for tab/object selectors: the user can
+    // hold a mapping over a selector, let its panel open, then continue the
+    // same drag into a field in that panel.
+    function registerHoverTarget(el, kinds, onHover) {
+        hoverTargetRegistry.push({ el: el, kinds: kinds, onHover: onHover });
     }
 
     // onHover(clientX, clientY, reorderElement) — optional, called on every
@@ -202,6 +212,15 @@ define([], function () {
         updateDragEdgeScroll(e.clientY);
 
         var target = findDropTarget(e.clientX, e.clientY);
+        var elAtPoint = document.elementFromPoint(e.clientX, e.clientY);
+        if (elAtPoint) {
+            hoverTargetRegistry.some(function (reg) {
+                if (reg.kinds.indexOf(activeDrag.kind) === -1 ||
+                    (reg.el !== elAtPoint && !reg.el.contains(elAtPoint))) return false;
+                reg.onHover();
+                return true;
+            });
+        }
 
         if (highlightedTarget && highlightedTarget !== target) {
             highlightedTarget.el.classList.remove(highlightedTarget.highlightClass);
@@ -276,6 +295,7 @@ define([], function () {
     return {
         resetDragEngine: resetDragEngine,
         registerDropTarget: registerDropTarget,
+        registerHoverTarget: registerHoverTarget,
         makeDraggableSource: makeDraggableSource,
         findInsertionPoint: findInsertionPoint,
         showInsertionIndicatorAt: showInsertionIndicatorAt,
