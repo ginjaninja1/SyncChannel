@@ -1572,7 +1572,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             selectedPresentationObjectBySchemaId[schema.Id] = selected;
 
             var title = document.createElement('h2');
-            title.innerText = 'Objects created in Emby';
+            title.innerText = 'Channel objects created in Emby';
             wrap.appendChild(title);
 
             var path = document.createElement('div');
