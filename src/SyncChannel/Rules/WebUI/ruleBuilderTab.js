@@ -123,6 +123,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
         // Bool -> Number -> Date -> String -> List, matching FieldDiscoveryService.
         var FIELD_TYPE_RANK = { Bool: 0, Number: 1, Date: 2, String: 3, List: 4 };
 
+        function fieldTypeDesignator(type) {
+            var normalizedType = String(type || 'String');
+            return normalizedType === 'Number' ? '#' : normalizedType.charAt(0).toUpperCase();
+        }
+
         function sortSchemaFields(fields) {
             return fields.slice().sort(function (a, b) {
                 if (!!a.IsFavorite !== !!b.IsFavorite) return a.IsFavorite ? -1 : 1;
@@ -173,7 +178,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
             var tag = document.createElement('span');
             tag.className = 'rcsFieldTypeTag esSourceTypeBadge esType-' + String(type || 'String').toLowerCase();
-            tag.innerText = String(type || 'String').toUpperCase();
+            tag.innerText = fieldTypeDesignator(type);
             chip.appendChild(tag);
 
             chip.dataset.dragLabel = displayName || fieldPath;
@@ -837,6 +842,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             runAutoPreview: runAutoPreview,
             ensureFieldsDiscovered: ensureFieldsDiscovered,
             makeFieldChip: makeFieldChip,
+            fieldTypeDesignator: fieldTypeDesignator,
             sortSchemaFields: sortSchemaFields,
             persistFieldFavorite: persistFieldFavorite,
             wireRawResponseControls: wireRawResponseControls

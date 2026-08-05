@@ -24,6 +24,8 @@ namespace SyncChannel.Services
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Security.Cryptography;
+    using System.Text;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -82,7 +84,7 @@ namespace SyncChannel.Services
                 return;
             }
 
-            var newIds = top4.Select(i => i.StableId).ToList();
+            var newIds = top4.Select(i => i.CanonicalId).ToList();
             bool setChanged = !newIds.SequenceEqual(cache.LastCollageStableIds ?? new List<string>());
 
             logger.Info("ChannelSync: Collage check for '{0}' — HasImage={1}, ReplaceOnChange={2}, SetChanged={3}, TopIds=[{4}].",
@@ -97,7 +99,7 @@ namespace SyncChannel.Services
             var localPaths = new List<string>();
             foreach (var item in top4)
             {
-                var path = await DownloadPosterToCache(item.PosterUrl, item.StableId, ct).ConfigureAwait(false);
+                var path = await DownloadPosterToCache(item.PosterUrl, item.CanonicalId, ct).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(path))
                 {
                     localPaths.Add(path);
@@ -170,9 +172,15 @@ namespace SyncChannel.Services
 
         // Persistent, keyed by StableId (not folder) — the same movie can
         // appear in multiple folders, and posters rarely change once set.
-        private async Task<string> DownloadPosterToCache(string posterUrl, string stableId, CancellationToken ct)
+        private async Task<string> DownloadPosterToCache(string posterUrl, string canonicalId, CancellationToken ct)
         {
-            var path = Path.Combine(appPaths.DataPath, "channel-sync", "folder-thumbs", stableId + ".jpg");
+            string cacheKey;
+            using (var sha256 = SHA256.Create())
+            {
+                cacheKey = string.Concat(sha256.ComputeHash(Encoding.UTF8.GetBytes(canonicalId ?? string.Empty))
+                    .Select(b => b.ToString("x2")));
+            }
+            var path = Path.Combine(appPaths.DataPath, "channel-sync", "folder-thumbs", cacheKey + ".jpg");
 
             if (File.Exists(path))
             {
@@ -200,7 +208,7 @@ namespace SyncChannel.Services
             }
             catch (Exception ex)
             {
-                logger.ErrorException("ChannelSync: Failed to download poster for StableId='{0}' from {1}", ex, stableId, posterUrl);
+                logger.ErrorException("ChannelSync: Failed to download poster for CanonicalId='{0}' from {1}", ex, canonicalId, posterUrl);
                 return null;
             }
         }

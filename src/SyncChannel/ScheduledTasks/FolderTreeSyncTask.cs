@@ -256,11 +256,12 @@ namespace SyncChannel.ScheduledTasks
             CancellationToken cancellationToken)
         {
             var existingCache = cacheStore.Read(node.Id);
-            var priorByStableId = existingCache.Items
-                .Where(i => !string.IsNullOrEmpty(i.StableId))
-                .GroupBy(i => i.StableId, StringComparer.OrdinalIgnoreCase)
+            var priorByCanonicalId = existingCache.Items
+                .Where(i => !string.IsNullOrEmpty(i.CanonicalId))
+                .GroupBy(i => i.CanonicalId, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-            var mergedItems = new List<CachedChannelItem>();
+            var freshItems = new List<CachedChannelItem>();
+            var carriedForwardItems = new List<CachedChannelItem>();
             bool anyAttempted = false, anySucceeded = false;
 
             foreach (var fetch in node.Fetches.Where(f => f.Enabled))
@@ -281,7 +282,7 @@ namespace SyncChannel.ScheduledTasks
 
                 if (rawJson == null)
                 {
-                    CarryForwardIfStillValid(node, fetch, currentFingerprint, existingCache, mergedItems);
+                    CarryForwardIfStillValid(node, fetch, currentFingerprint, existingCache, carriedForwardItems);
                     continue;
                 }
 
@@ -291,12 +292,38 @@ namespace SyncChannel.ScheduledTasks
 
                 if (results == null)
                 {
-                    CarryForwardIfStillValid(node, fetch, currentFingerprint, existingCache, mergedItems);
+                    CarryForwardIfStillValid(node, fetch, currentFingerprint, existingCache, carriedForwardItems);
                     continue;
                 }
 
                 anySucceeded = true;
-                mergedItems.AddRange(results.Select(r => ToCache(r, fetch.Id, fetch.DisplayLabel, connection.Id, schema, priorByStableId)));
+                freshItems.AddRange(results.Select(r => ToCache(r, fetch.Id, fetch.DisplayLabel, connection.Id, schema, priorByCanonicalId)));
+            }
+
+            var freshIds = new HashSet<string>(
+                freshItems.Select(i => i.CanonicalId),
+                StringComparer.OrdinalIgnoreCase);
+            var mergedItems = freshItems
+                .Concat(carriedForwardItems.Where(i => !freshIds.Contains(i.CanonicalId)))
+                .ToList();
+
+            // Emby matches ChannelItemInfo.Id against a snapshot of the
+            // current parent's children. Returning the same new id twice in
+            // one response can therefore create two rows. Multiple fetches
+            // that discover the same connection-scoped foreign object must
+            // converge here before the channel sees them.
+            var duplicateCount = mergedItems.Count - mergedItems
+                .Select(i => i.CanonicalId)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            mergedItems = mergedItems
+                .Where(i => !string.IsNullOrEmpty(i.CanonicalId))
+                .GroupBy(i => i.CanonicalId, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+            if (duplicateCount > 0)
+            {
+                logger.Info("ChannelSync: Folder '{0}' collapsed {1} duplicate foreign object result(s) by canonical identity.", node.DisplayName, duplicateCount);
             }
 
             if (!anyAttempted)
@@ -365,9 +392,10 @@ namespace SyncChannel.ScheduledTasks
             string fetchDisplayName,
             string connectionId,
             EndpointSchema schema,
-            IReadOnlyDictionary<string, CachedChannelItem> priorByStableId)
+            IReadOnlyDictionary<string, CachedChannelItem> priorByCanonicalId)
         {
-            var firstSeenUtc = priorByStableId.TryGetValue(item.StableId, out var prior)
+            var canonicalId = ChannelItemIdentity.Build(connectionId, item.StableId);
+            var firstSeenUtc = priorByCanonicalId.TryGetValue(canonicalId, out var prior)
                 ? prior.FirstSeenUtc
                 : DateTimeOffset.UtcNow;
 
@@ -376,7 +404,9 @@ namespace SyncChannel.ScheduledTasks
                 ProviderKey = fetchInstanceId,
                 FetchDisplayName = string.IsNullOrWhiteSpace(fetchDisplayName) ? schema.DisplayName : fetchDisplayName,
                 SourceFingerprint = connectionId + "|" + schema.Id,
+                ConnectionId = connectionId,
                 StableId = item.StableId,
+                CanonicalId = canonicalId,
                 Presentation = schema.Presentation,
                 ObjectKind = schema.ObjectKind,
                 LeafMediaType = schema.LeafMediaType,

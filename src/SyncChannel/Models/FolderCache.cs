@@ -27,11 +27,21 @@ namespace SyncChannel.Models
         /// </summary>
         public string SourceFingerprint { get; set; } = string.Empty;
 
+        /// <summary>The connection whose foreign identity domain owns this item.</summary>
+        public string ConnectionId { get; set; } = string.Empty;
+
         /// <summary>When this StableId first appeared in this folder's cache — carried forward across syncs, never re-stamped once set.</summary>
         public DateTimeOffset FirstSeenUtc { get; set; }
 
         /// <summary>The provider's permanent identity (e.g. Radarr's TitleSlug) — see FetchedItem.StableId.</summary>
         public string StableId { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Connection-scoped identity supplied to Emby (for example
+        /// "syncchannel::{connectionId}::{StableId}"). This, rather than the
+        /// raw StableId or tree placement, is the channel object's identity.
+        /// </summary>
+        public string CanonicalId { get; set; } = string.Empty;
 
         // Which Emby channel object this item becomes — see
         // ChannelObjectKind. Carried from the EndpointSchema that produced

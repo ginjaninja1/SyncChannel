@@ -136,6 +136,11 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
 
         var canvasRenderToken = 0; // guards against a stale ensureFieldsDiscovered response rendering over a newer selection
 
+        function renderNoRuleSetPreview(view) {
+            view.querySelector('#rcsPreviewStatus').innerText = 'No rule set selected.';
+            view.querySelector('#previewResult').innerText = 'No matches.';
+        }
+
         function renderCanvasForCurrentIndex(view, forceRefresh) {
             var list = view.querySelector('#conditionsList');
             list.innerHTML = '';
@@ -151,6 +156,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             var ruleSet = store.ruleSetById(store.get('currentRuleSetId'));
 
             if (!ruleSet) {
+                renderNoRuleSetPreview(view);
                 return;
             }
 
@@ -641,6 +647,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
             renderConnectionAndSchemaSelects: renderConnectionAndSchemaSelects,
             renderRuleSetSelect: renderRuleSetSelect,
             renderCanvasForCurrentIndex: renderCanvasForCurrentIndex,
+            renderNoRuleSetPreview: renderNoRuleSetPreview,
             refreshRuleSetDirtyState: refreshRuleSetDirtyState,
             ruleSetsForComparison: ruleSetsForComparison,
             hasUnsavedChanges: ruleSetsAreDirty,

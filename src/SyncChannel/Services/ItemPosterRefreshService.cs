@@ -44,41 +44,44 @@ namespace SyncChannel.Services
                 return;
             }
 
-            var item = libraryManager.GetItemsResult(new InternalItemsQuery
+            var items = libraryManager.GetItemsResult(new InternalItemsQuery
             {
                 ExternalId = externalId
-            }).Items.FirstOrDefault();
+            }).Items.ToList();
 
-            if (item == null)
+            if (items.Count == 0)
             {
                 // Expected on first sync before Emby has persisted the item yet.
                 return;
             }
 
-            var currentPath = item.GetImagePath(ImageType.Primary);
-            if (string.Equals(currentPath, posterUrl, StringComparison.OrdinalIgnoreCase))
+            foreach (var item in items)
             {
-                return;
-            }
-
-            try
-            {
-                item.SetImage(new ItemImageInfo
+                var currentPath = item.GetImagePath(ImageType.Primary);
+                if (string.Equals(currentPath, posterUrl, StringComparison.OrdinalIgnoreCase))
                 {
-                    Path = posterUrl,
-                    Type = ImageType.Primary,
-                    DateModified = DateTimeOffset.UtcNow
-                }, 0);
+                    continue;
+                }
 
-                libraryManager.UpdateImages(item);
+                try
+                {
+                    item.SetImage(new ItemImageInfo
+                    {
+                        Path = posterUrl,
+                        Type = ImageType.Primary,
+                        DateModified = DateTimeOffset.UtcNow
+                    }, 0);
 
-                logger.Info(
-                    "ChannelSync: Poster refreshed for ExternalId='{0}' — '{1}' -> '{2}'.",
-                    externalId, currentPath ?? "(none)", posterUrl);
-            }
-            catch (Exception ex)
-            {
-                logger.ErrorException("ChannelSync: Failed to refresh poster for ExternalId='{0}'", ex, externalId);
+                    libraryManager.UpdateImages(item);
+
+                    logger.Info(
+                        "ChannelSync: Poster refreshed for ExternalId='{0}' — '{1}' -> '{2}'.",
+                        externalId, currentPath ?? "(none)", posterUrl);
+                }
+                catch (Exception ex)
+                {
+                    logger.ErrorException("ChannelSync: Failed to refresh poster for ExternalId='{0}'", ex, externalId);
+                }
             }
         }
     }

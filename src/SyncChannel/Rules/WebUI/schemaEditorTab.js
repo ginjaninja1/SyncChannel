@@ -1295,7 +1295,7 @@ define(['jQuery', 'configurationpage?name=SyncChannelStoreJs',
                 });
                 var typeBadge = chip.querySelector('.rcsFieldTypeTag');
                 if (typeBadge) {
-                    typeBadge.innerText = String(f.Type || 'String').toUpperCase();
+                    typeBadge.innerText = ruleBuilderTab.fieldTypeDesignator(f.Type);
                 }
 
                 chip.addEventListener('mouseenter', function () {

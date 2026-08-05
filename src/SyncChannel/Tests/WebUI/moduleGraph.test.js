@@ -45,6 +45,15 @@ assert.strictEqual(typeof load('SyncChannel.js'), 'function');
 const manager = load('ruleSetManagerTab.js');
 const store = load('store.js');
 const helpers = load('sharedHelpers.js');
+const emptyPreviewElements = {
+    '#rcsPreviewStatus': { innerText: '1 match(es):' },
+    '#previewResult': { innerText: 'Previous match' }
+};
+manager.renderNoRuleSetPreview({
+    querySelector: selector => emptyPreviewElements[selector]
+});
+assert.strictEqual(emptyPreviewElements['#rcsPreviewStatus'].innerText, 'No rule set selected.');
+assert.strictEqual(emptyPreviewElements['#previewResult'].innerText, 'No matches.');
 const serverShape = { RuleSets: [{
     Id: 'builtin', Name: 'Missing', EndpointSchemaId: 'movies', IsBuiltIn: true,
     Root: { Kind: 'Group', Not: false, LogicOperator: 'And', Children: [{
